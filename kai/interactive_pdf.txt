@@ -1,0 +1,1225 @@
+Travelers umbrella logo
+Quantinuum logo
+LTM logo
+Quantum Optimization
+Showdown
+DQI vs QAOA on Trapped-Ion Hardware
+
+|Y>Quantum 2026 — Yale University — April 4–5
+
+01 / THE CHALLENGE
+Two Algorithms. One Quantum Computer.
+One Real Insurance Problem.
+Which quantum approach scales better on P&C insurance product bundling?
+
+QAOA
+The hybrid variational approach: a classical optimizer repeatedly chooses circuit angles, and the quantum device estimates the cost. Well-studied, but performance depends on depth, noise, and optimizer behavior.
+
+DQI
+The fixed-circuit interference approach used in this challenge: encode the instance, run the circuit, decode, and post-select. There is no variational parameter loop, but decoding and post-selection still matter.
+
+Your Mission
+Benchmark both on the official instance sizes n = 10, 21, 20, 50, 200. Compare solution quality, workflow cost, and scaling against a classical baseline.
+
+How to read this deck:
+First understand the business objective and constraints. Then follow the ILP-to-QUBO bridge, and only then compare QAOA and DQI. Keep three metrics separate throughout: solution quality, total workflow cost, and hardware resources.
+
+02 / THE BUSINESS PROBLEM
+Insurance Product Bundling
+Think a streaming platform for insurance: which coverages go into which plans?
+
+20 Coverages across 9 Families
+auto_base (mandatory): basic $720 / enhanced $1,180
+property_base (mandatory): homeowners $1,450 / condo $580 / renters $220
+auto_physical: collision $480 / comprehensive $320
+auto_medical: med pay $95 / PIP $210
+motorist: uninsured $175 / underinsured $140
+auto_ancillary: roadside $75 / rental $55 / gap $310
+property_addon: floater $195 / ALE $110
+liability_extend: umbrella $380 / excess $470
+specialty: flood $950 / earthquake $1,350
+10 Target Packages
+Young Driver Budget — 22% discount
+Young Family Starter — 18% discount
+Suburban Homeowner — 15% discount
+Urban Condo Owner — 17% discount
+Premium Full Coverage — 10% discount
+Senior Value — 20% discount
+High-Risk Area — 12% discount
+Basic Compliance — 25% discount
+Auto-Focused — 16% discount
+Property-Focused — 14% discount
+Open Interactive Diagram →
+03 / THE TRADEOFF
+The Bundling Tradeoff
+More discount = more customers, but less revenue per customer
+
+ci,m = pricei × margini × (1 − δm) × (take_ratei × αi,m × (1 + 1.2⋅δm))
+
+                               ↑ revenue loss              ↑ demand gain
+Worked Example:
+auto_base (basic) in "Young Driver Budget": $720 × 0.22 × 0.78 × (0.88 × 1.25 × 1.264) = $171.75 contribution margin per customer.
+
+04 / CONSTRAINTS
+Five Constraint Types Shape the Landscape
+Mandatory Families
+Σ x = 1: Exactly one from auto_base and property_base per package. Choosing basic vs enhanced changes which optional coverages are available.
+
+Optional Families
+Σ x ≤ 1: At most one from each of the 7 optional families.
+
+Capacity: K = 7
+No more than 7 coverages per package. Forces the optimizer to pick the most profitable subset.
+
+Incompatible Pairs
+3 pairs that can't coexist: gap ↔ floater, ALE ↔ earthquake, excess ↔ flood.
+
+Dependencies
+6 rules: flood/earthquake/ALE require homeowners; umbrella/excess require enhanced auto liability; floater requires condo.
+
+The Interaction
+Mandatory choice gates optional access. Pick renters instead of homeowners? No flood, earthquake, or ALE allowed. This is the complexity.
+
+05 / THE BRIDGE TO QUANTUM
+ILP → QUBO → Quantum Circuit
+In this challenge, QAOA uses a penalty-QUBO bridge before the quantum circuit stage
+
+1. The ILP
+maximize Σ c · x
+subject to Ax ≤ b
+
+→
+2. Add Penalties
+minimize −Σc·x
++ λΣ(Ax − b)²
+
+→
+3. QUBO Matrix Q
+minimize xTQx
+Q encodes objective + penalties
+
+→
+4. Quantum!
+QAOA: cost Hamiltonian from QUBO
+DQI: further re-encode into max-XORSAT
+
+Key Insight:
+The QUBO is block-diagonal across packages, so the logical decision variables split into independent package-level sub-problems. For the full challenge, each block has 20 decision bits, but total quantum resources can still grow once auxiliaries or algorithm-specific overhead are included.
+
+Open Interactive Diagram →
+06 / QAOA
+QAOA: The Variational Approach
+Classical optimizer + quantum circuit in a feedback loop
+
+The Loop
+Prepare all qubits in superposition (H gates)
+Cost layer: Rz for objective + ZZPhase for penalties
+Mixer layer: Rx rotations explore new solutions
+Measure → compute energy → optimizer adjusts angles
+Repeat many objective evaluations until the estimated cost stops improving
+Why This Hardware Fits QAOA
+ZZPhase is native: ZZ-style penalty couplings map naturally to the hardware gate set
+All-to-all connectivity: no SWAP overhead
+Rz is free: virtual gate, zero physical cost
+Start with p = 1, try p = 2 if time permits
+Open Interactive Diagram →
+07 / DQI
+DQI: The Interference Approach
+Error correction in reverse — one shot, no optimization loop
+
+The Pipeline
+Dicke state: equal superposition of k-hot strings
+Phase encoding: Rz(ci) on each variable qubit
+Syndrome encoding: CNOT network from parity matrix B
+Decoder stage: optional BP1-style decoding for feasibility steering
+Hadamard + Measure: interfere and read out
+Post-select: keep only syndrome = 0 results
+Key Tradeoffs
+No variational optimizer loop: this implementation fixes the circuit structure, then decodes and post-selects
+More qubits needed: n variables + m syndrome qubits
+Re-encoding risk: parity constraints can lose information if the max-XORSAT model is too coarse
+Post-selection cost: ~10–30% of shots kept
+Based on LDPC coding theory (same math as 5G!)
+Open Interactive Diagram →
+08 / HEAD TO HEAD
+QAOA vs DQI
+Aspect	QAOA		DQI
+Philosophy	Tune the circuit	VS	Let interference work
+Parameters	2p angles to optimize	VS	No variational parameters to tune
+Circuit evaluations	Many objective evaluations	VS	Fixed circuit + decoding + post-selection
+Constraints	Penalty terms (λ)	VS	Parity check matrix (mod-2)
+Measurement usage	Uses all shots	VS	Discards ~70–90% (post-select)
+Qubits (per sub-problem)	N = 5–20	VS	N + m ≈ 2N
+Note:
+Read this table as a comparison of workflows, not a proof that one algorithm is universally better. QAOA is the more mature variational method; DQI is a newer decoder-based approach that can behave very differently depending on the encoding and noise model.
+
+Open Interactive Diagram →
+09 / SCALING
+Problem Scaling
+Benchmark across at least 3 sizes
+
+N × M	Binary Vars (n)	Sub-problems	Qubits / sub	Difficulty
+5 × 2	10	2 blocks of 5	5	Toy
+7 × 3	21	3 blocks of 7	7	Easy
+10 × 2	20	2 blocks of 10	10	Medium
+10 × 5	50	5 blocks of 10	10	Medium
+20 × 10	200	10 blocks of 20	20	Full Challenge
+Block-diagonal decomposition:
+Even the full n=200 benchmark decomposes into 10 independent 20-variable logical sub-problems. That makes the problem register package-local, but whether a full workflow fits on hardware still depends on ancillas, syndrome qubits, and the algorithm you choose.
+
+Open Interactive Diagram →
+10 / PLATFORM
+Quantinuum Helios + Guppy + Selene
+Quantinuum trapped-ion systems via Guppy, with Selene emulator support for development and testing.
+
+Current Platform
+Helios is the hardware family referenced by the updated challenge brief.
+Teams are expected to work through Guppy and the Selene emulator during the hackathon.
+Follow the current platform instructions from the challenge doc, not older `pytket` examples.
+
+Why It Matters
+QAOA cost layers with ZZ-style couplings map directly and naturally to native entangling operations.
+All-to-all connectivity means the compiler avoids the extra routing burden seen on limited-connectivity devices.
+This hardware is especially well matched to this style of optimization circuit.
+
+Quick Start
+pip install guppylang
+python -c "import guppylang"
+# Use Selene through guppylang.emulator
+# Follow hackathon setup instructions
+
+Docs To Use
+Guppy getting started
+Guppy examples
+Helios hardware guide
+
+11 / DELIVERABLES
+What You Must Deliver
+1. Implement Both
+Working QAOA and DQI implementations aligned to the current Quantinuum stack. Test QAOA at p=1 and p=2 at minimum.
+
+2. Benchmark
+Quality of solution and time-to-solution proxy metrics across at least 3 problem sizes.
+
+3. Analyze
+Scaling plots, resource comparison, constraint handling analysis, and insights on WHY they differ.
+
+Record for each run:
+Approximation ratio
+Circuit depth (native gates)
+Two-qubit gate count
+Number of qubits
+Shot count / evaluations / proxy runtime data
+Feasibility rate
+12 / JUDGING
+Evaluation Criteria
+30%
+Quality of Solution
+
+25%
+Time-to-Solution Proxies
+
+20%
+Scaling Analysis
+
+15%
+Implementation
+
+10%
+Presentation
+
+What wins:
+Not just running the algorithms, but insightful analysis of WHY they differ. Show scaling plots, exploit the block-diagonal structure, and explain the tradeoffs.
+
+13 / TIPS FOR SUCCESS
+Tips for Success
+Start small: Get both algorithms working on n=10 before scaling up
+Classical baselines first: Solve with PuLP so you know the optimum
+Exploit the block structure: Decompose into M independent sub-circuits
+ZZPhase is your friend: Each penalty maps naturally to a native ZZ gate
+Tune λ carefully: Start with λ = 3 × max(c) and adjust
+Mandatory choice matters: Which coverage from auto_base/property_base you pick gates the optional coverages via dependencies
+Read the starter code: src/insurance_model.py, the learning guides, and the comparison notebook
+Let's Go.
+24 hours. Two algorithms. One quantum computer.
+
+Questions? Visit the sponsor table or ask a mentor.
+
+Challenge data: Download YQH26_data.zip
+
+Travelers umbrella logo
+Quantinuum logo
+LTM logo
+← Previous
+1 / 15
+Next →
+
+P&C Insurance Product Bundling Optimization
+|Y>Quantum 2026 Hackathon Challenge — Sponsor Challenge Materials
+The Goal: Choose which coverages go into which packages to maximize total expected profit.    The Catch: More discount = more customers, but less revenue per customer.
+Optimization Lens: What Is the Solver Choosing?
+Read the Decision Variables
+xi,m = 1 means coverage i is included in package m.
+xi,m = 0 means that coverage is left out of that package.
+The optimization goal is to maximize total expected contribution across all coverage-package assignments.
+A solution is feasible only if it obeys all family, dependency, incompatibility, and capacity rules.
+Feasible vs. Infeasible Bundles
+Feasible: enhanced auto liability + homeowners + collision + personal umbrella. This respects mandatory-family, dependency, and at-most-one rules.
+Infeasible: renters + flood insurance. Flood requires homeowners, so this bundle breaks a dependency rule.
+Also infeasible: gap insurance + personal property floater. That pair is explicitly incompatible.
+The package cards on the right are candidate bundles to inspect, not certified optimal answers.
+Coverages
+20
+Auto Base
+MANDATORY
+Auto Liability Basic
+$720
+Auto Liability Enhanced
+$1180
+Property Base
+MANDATORY
+Homeowners
+$1450
+Condo Owners
+$580
+Renters
+$220
+Auto Physical
+OPTIONAL
+Collision
+$480
+Comprehensive
+$320
+Auto Medical
+OPTIONAL
+Medical Payments
+$95
+Personal Injury Protection
+$210
+Motorist Protection
+OPTIONAL
+Uninsured Motorist
+$175
+Underinsured Motorist
+$140
+Auto Ancillary
+OPTIONAL
+Roadside Assistance
+$75
+Rental Reimbursement
+$55
+GAP Insurance
+$310
+Property Add-on
+OPTIONAL
+Personal Property Floater
+$195
+Additional Living Expense
+$110
+Liability Extension
+OPTIONAL
+Personal Umbrella
+$380
+Excess Liability
+$470
+Specialty Peril
+OPTIONAL
+Flood Insurance
+$950
+Earthquake Insurance
+$1350
+Packages
+10
+Young Driver Budget
+22% off
+7 coverages · Expected profit: $499.23
+Young Family Starter
+18% off
+7 coverages · Expected profit: $537.86
+Suburban Homeowner
+15% off
+7 coverages · Expected profit: $653.91
+Urban Condo Owner
+17% off
+7 coverages · Expected profit: $515.41
+Premium Full Coverage
+10% off
+7 coverages · Expected profit: $673.76
+Senior Value
+20% off
+7 coverages · Expected profit: $575.88
+High-Risk Area
+12% off
+7 coverages · Expected profit: $603.00
+Basic Compliance
+25% off
+7 coverages · Expected profit: $490.80
+Auto-Focused
+16% off
+7 coverages · Expected profit: $539.91
+Property-Focused
+14% off
+7 coverages · Expected profit: $583.50
+🔒
+Exactly 1 from mandatory families
+🎩
+At most 1 from optional families
+🔢
+Max 7 coverages per package
+→
+Dependencies (e.g. homeowners → flood)
+✗
+Incompatible pairs (e.g. gap ✗ property floater)
+The Tradeoff: Discount vs. Profit
+Interactive Discount Explorer
+Discount
+
+33%
+Price
+$720 (auto_liability_basic)
+22%
+Revenue / Unit
+$106.13
+Demand Factor
+1.23x
+Expected Profit
+$130.38
+Profit by Discount Level
+0%
+5%
+10%
+15%
+20%
+25%
+30%
+35%
+40%
+Profit Contribution Formula
+ci,m = price × margin × (1 - discount)
+      × (take_rate × affinity × (1 + 1.2 × discount))
+1. price × margin × (1-discount) = unit margin after the package discount
+2. take_rate × affinity × (1+1.2×discount) = stimulated take-rate factor
+3. expected contribution = (unit margin) × (stimulated take-rate factor)
+The discount simultaneously decreases revenue per unit and increases the demand factor — creating a non-trivial optimization landscape.
+At 33% discount, expected contribution for this one coverage is $130.38. High discount: stronger demand lift, but thinner unit margin.
+|Y>Quantum 2026 — Sponsor Challenge Materials  |  arXiv:2509.08328  |  N=20 coverages, M=10 packages, n=200 binary decision variables
+
+ILP to QUBO Transformation Pipeline
+Business Problem
+QUBO Encoding
+|Y> Quantum 2026
+1
+2
+3
+4
+5
+Previous
+Next Step
+Step 1. The Integer Linear Program (ILP)
+The optimization problem we want to solve, written as a binary program with linear objective and constraints.
+f
+Objective Function
+Each 
+ indicates whether coverage 
+ is included in package 
+. The coefficient 
+ is the contribution margin (profit) from that assignment.
+
+C
+Constraints (5 types)
+#	Type	Formula	Count/pkg
+1	Mandatory families	
+2
+2	Optional families	
+7
+3	Capacity	
+1
+4	Incompatibility	
+3
+5	Dependency	
+6
+W
+Worked Example: 5-Coverage, 1-Package Mini-Instance
+Package: "Young Driver Budget" — discount 
+, price-sensitivity 
+
+Coverage	Family	Price	Margin	Take Rate	Affinity 
+auto_liability_basic	mandatory	$720	0.22	0.88	1.25	171.75
+auto_liability_enhanced	mandatory	$1,180	0.28	0.45	0.70	102.61
+homeowners	mandatory	$1,450	0.25	0.65	0.70	162.62
+collision	optional	$480	0.24	0.62	1.10	77.46
+comprehensive	optional	$320	0.26	0.58	0.90	42.82
+Calculation: 
+ = price 720 × margin 0.22 × (1 - δ) (1 - 0.22) = 0.78 × (take × α × (1+βδ)) (0.88 × 1.25 × 1.264)
+= 720 × 0.22 × 0.78 × 1.3904
+= 123.55 × 1.3904 = 171.75
+Mini-instance constraints: Coverages 1-2 form the auto_base family (mandatory: pick exactly 1). Coverages 4-5 form the auto_physical family (optional: pick at most 1). Coverage 3 is the sole member of property_base in this subsample (must pick it).
+
+QAOA -- Quantum Approximate Optimization Algorithm
+|Y>Quantum 2026 Hackathon -- QAOA Explainer
+Interactive Explainer
+Animation:
+Play Loop
+Reset
+Iteration: 0 / 12    Energy: --
+sends
+parameters
+measures
+bitstrings
+computes
+energy
+adjusts angles
+Classical Optimizer
+COBYLA / Nelder-Mead
+Picks angles 
+γ
+,
+β
+γ,β
+
+Quantum Circuit
+Evaluates cost
+at given angles
+
+Measurement
+Sample bitstrings,
+compute 
+⟨
+H
+cost
+⟩
+⟨H 
+cost
+​
+ ⟩
+
+Convergence Check
+Repeat until energy stops improving
+
+Energy vs. Iteration
+Key Insight
+QAOA is variational: a classical optimizer tunes quantum circuit parameters in a feedback loop.
+
+Think of it like black-box parameter tuning: the optimizer proposes angles, the quantum computer estimates the cost, and the loop repeats.
+
+min_{gamma,beta} <psi(gamma,beta)| H_cost |psi(gamma,beta)>
+Important distinction: QAOA minimizes an expected cost, but the candidate answers are the measured bitstrings. Low expectation value usually helps, but the final answer still comes from sampling.
+
+The quantum computer explores many states in superposition; the classical optimizer only sees noisy estimates of their average cost and steers the angles from there.
+QAOA -- Quantum Approximate Optimization Algorithm
+|Y>Quantum 2026 Hackathon -- QAOA Explainer
+Interactive Explainer
+QAOA Circuit for N=5 Qubits
+Depth p =
+1
+2
+3
+Hadamard (H)
+Cost Layer (click to expand)
+Mixer Layer (click to expand)
+Measurement
+How To Read This Circuit
+The diagram is symbolic: it shows how the QUBO terms map into quantum operations. Single-variable terms become one-qubit phase rotations; pairwise terms become ZZ couplings. Treat the exact API parameterization as platform-specific and follow the current Quantinuum tooling docs used at the hackathon.
+
+|0⟩
+auto_liabili
+|0⟩
+auto_collisi
+|0⟩
+auto_compreh
+|0⟩
+auto_roadsid
+|0⟩
+home_dwellin
+H
+H
+H
+H
+H
+Rz
+Rz
+Rz
+Rz
+Rz
+ZZPhase
+Rx
+Rx
+Rx
+Rx
+Rx
+Layer 1
+M
+M
+M
+M
+M
+|Y>Quantum 2026 -- Sponsor Challenge Materials -- QAOA Interactive Explainer
+QAOA -- Quantum Approximate Optimization Algorithm
+|Y>Quantum 2026 Hackathon -- QAOA Explainer
+Interactive Explainer
+Read These Numbers Carefully
+The p = 1, 2, 3 values on this page are illustrative toy numbers for the five-qubit teaching circuit shown here. They are meant to explain the depth tradeoff, not to claim theorem-backed approximation ratios for the full insurance instance.
+
+p = 1
+One cost + mixer layer. Coarse exploration of the solution space.
+
+~0.69
+Illustrative ratio
+2
+Parameters
+~30
+Toy gates (N=5)
+p = 2
+Two layers. Better optimization with a richer parameter landscape.
+
+~0.84
+Illustrative ratio
+4
+Parameters
+~55
+Toy gates (N=5)
+p = 3
+Three layers. Near-optimal but deeper circuit means more noise on real hardware.
+
+~0.92
+Illustrative ratio
+6
+Parameters
+~80
+Toy gates (N=5)
+The Depth-Quality Tradeoff
+The Tradeoff
+More layers (higher p) can improve the best reachable objective, but they also cost more:
+
+-- More parameters for the optimizer to tune (harder optimization)
+-- Deeper circuit = more gates = more noise on real hardware
+-- Diminishing returns: going from p=1 to p=2 helps a lot, p=10 to p=11 barely matters
+
+For the challenge's package-local blocks, p=1 or p=2 is a practical starting point on near-term hardware, not a guaranteed optimum.
+
+|Y>Quantum 2026 -- Sponsor Challenge Materials -- QAOA Interactive Explainer
+QAOA -- Quantum Approximate Optimization Algorithm
+|Y>Quantum 2026 Hackathon -- QAOA Explainer
+Interactive Explainer
+Energy Landscape: E(gamma, beta)
+A synthetic teaching surface for p=1. It shows why parameter optimization can be smooth in some regions and trap-filled in others.
+
+Optimizer path (white dots)
+Global minimum (goal)
+Local minimum (trap!)
+Starting point
+What Am I Looking At?
+This is a synthetic 2D contour plot of the expected energy as a function of the two QAOA parameters (gamma and beta) for p = 1.
+
+Dark blue = low energy (good solutions). Yellow/red = high energy (bad solutions).
+
+The white dots trace the optimizer's path from start to convergence. For larger p, the true landscape lives in 2p dimensions, not just two.
+
+Local Minima = Traps
+The landscape has multiple valleys. A local search method can get stuck in a nearby minimum instead of finding the global best one.
+
+Watch out for local minima! Multi-start strategies or better optimizers (COBYLA, SPSA) can help escape traps.
+Controls
+Animate Optimizer Path Reset Random Start Point
+|Y>Quantum 2026 -- Sponsor Challenge Materials -- QAOA Interactive Explainer
+|Y>Quantum 2026 -- Sponsor Challenge Materials -- QAOA Interactive Explainer
+
+Decoded Quantum Interferometry
+DQI = Interference-based: quantum mechanics + coding theory find good solutions without optimization. Think of it like error correction in reverse.
+
+Industry Sponsor
+|
+Hardware Platform
+|
+Research Partner
+|
+|Y>Quantum 2026
+Section A
+Why DQI Re-encodes the Problem
+Start in business language
+The insurance challenge begins as a binary optimization problem: each coverage decision is a bit, and the model is written using prices, discounts, family rules, dependencies, incompatibilities, and package limits.
+
+choose x_i in {0,1}
+maximize business value
+subject to binary constraints
+That is a normal ILP mindset: add variables, compare sums, and enforce rules with equalities or inequalities.
+
+What DQI wants instead
+DQI does not work directly with ordinary sums like x_a + x_b ≤ 1. Its circuit is built around parity checks, so it wants statements of the form:
+
+x_1 ⊕ x_4 ⊕ a_2 = 1
+This is the language of max-XORSAT: XOR clauses over bits, sometimes with helper bits added.
+
+Why the translation matters
+The DQI circuit computes a syndrome: a record of which parity checks are satisfied or violated.
+
+If the problem is still written only as ordinary ILP sums and inequalities, there is no parity-check structure for the circuit to evaluate.
+
+1
+Original rule
+Start from a binary ILP constraint written in plain optimization language.
+
+2
+Ask what type it is
+Is it already a parity-like equality, or is it an inequality / logic rule that needs extra work?
+
+3
+Introduce helper bits if needed
+Slack, carry, or intermediate logic bits help preserve the meaning of the original constraint.
+
+4
+Rewrite as XOR clauses
+Each finished rule becomes a parity check that asks for even or odd parity.
+
+5
+Feed DQI
+The clauses become the parity-check data that the quantum circuit and decoder operate on.
+
+Rule that converts cleanly
+If you must choose exactly one of two options, parity already captures the rule.
+
+ILP: x_auto_basic + x_auto_enhanced = 1
+XOR: x_auto_basic ⊕ x_auto_enhanced = 1
+Good news. For two binary variables, “sum equals 1” and “XOR equals 1” mean the same thing: exactly one bit is on.
+
+Rule that does not convert cleanly
+Many realistic constraints are not parity statements by themselves.
+
+ILP: x_gap + x_floater ≤ 1
+Wrong shortcut: x_gap ⊕ x_floater = ?
+Real move: add helper bits → build gadgets → get XOR clauses
+Important warning. Taking an inequality “mod 2” usually loses the information you actually care about.
+
+Big picture: DQI is not solving a different business problem. It is solving the same business problem after that problem has been rewritten into a parity-check language that the circuit can understand.
+"DQI = Interference-based: quantum mechanics + coding theory
+find good solutions without optimization."
+arXiv:2509.08328 · |Y>Quantum 2026 Hackathon · Sponsor Challenge Materials
+Decoded Quantum Interferometry
+DQI = Interference-based: quantum mechanics + coding theory find good solutions without optimization. Think of it like error correction in reverse.
+
+Industry Sponsor
+|
+Hardware Platform
+|
+Research Partner
+|
+|Y>Quantum 2026
+Section B
+GF(2), XOR, and Parity
+GF(2) is arithmetic on bits
+GF(2) is the two-element field {0,1}. It is the natural arithmetic system when your variables are binary bits.
+
+Allowed values
+0 or 1
+Key rule
+1 + 1 = 0
+Meaning
++ mod 2 = XOR
+x ⊕ y = x + y (mod 2)
+x ⊕ y ⊕ z = x + y + z (mod 2)
+x	y	x ⊕ y
+0	0	0
+0	1	1
+1	0	1
+1	1	0
+x	y	z	x + y + z (mod 2)
+0	0	0	0
+0	0	1	1
+0	1	0	1
+0	1	1	0
+1	0	0	1
+1	0	1	0
+1	1	0	0
+1	1	1	1
+What a parity clause is saying
+A clause like
+
+x_1 ⊕ x_4 ⊕ a_2 = 1
+does not mean “add these numbers in the usual sense.” It means:
+
+look only at the listed bits,
+count whether an even or odd number of them are 1,
+demand the required parity on the right-hand side.
+If the clause equals 0, it asks for even parity. If the clause equals 1, it asks for odd parity.
+
+Even parity
+x_a ⊕ x_b ⊕ x_c = 0 means the number of 1s among those bits must be even.
+
+Allowed examples: 000, 011, 101, 110
+Rejected examples: 001, 010, 100, 111
+Odd parity
+x_a ⊕ x_b ⊕ x_c = 1 means the number of 1s among those bits must be odd.
+
+Allowed examples: 001, 010, 100, 111
+Rejected examples: 000, 011, 101, 110
+Student tip: When you see XOR, read it in words as “the parity of these bits.” That mental translation is much more helpful than trying to treat it like ordinary addition.
+Bridge to the next section: One XOR clause is one parity check. A full DQI instance has many such clauses, and the next step is to organize them into a compact matrix form.
+"DQI = Interference-based: quantum mechanics + coding theory
+find good solutions without optimization."
+arXiv:2509.08328 · |Y>Quantum 2026 Hackathon · Sponsor Challenge Materials
+Decoded Quantum Interferometry
+DQI = Interference-based: quantum mechanics + coding theory find good solutions without optimization. Think of it like error correction in reverse.
+
+Industry Sponsor
+|
+Hardware Platform
+|
+Research Partner
+|
+|Y>Quantum 2026
+Section C
+From ILP to max-XORSAT, Step by Step
+Goal of this section: keep the original optimization problem intact while rewriting it into a parity-check form. We are changing the representation, not the business meaning.
+1
+Start with the original bits
+Write the business decisions as binary variables x. These are the choices you actually care about, like whether a coverage is selected.
+
+2
+Convert what converts exactly
+Some equalities already behave like parity rules. Those can become XOR clauses directly with no extra machinery.
+
+3
+Add helper bits when needed
+Inequalities and intermediate logic often need slack, carry, or ancilla bits so the rewritten system still means the same thing.
+
+4
+Stack the clauses
+Once every rule is written as a parity check, collect them into matrix form: B y = v (mod 2).
+
+x and y
+x is the original decision vector. After adding helper bits, the enlarged vector of all bits is called y.
+
+B
+Each row of B describes one parity clause. A 1 means that variable participates in the clause; a 0 means it does not.
+
+v
+The entry v_j tells you whether row j wants even parity (0) or odd parity (1).
+
+Weights
+Feasibility is not the whole story. Weights carry information about solution quality so the encoding still reflects the objective, not just valid/invalid status.
+
+Three clauses become three rows
+Suppose one helper bit a0 has been introduced and the rewritten parity checks are:
+
+clause 1: x0 ⊕ x1 = 1
+clause 2: x0 ⊕ a0 = 0
+clause 3: x2 ⊕ a0 = 1
+Read each line one by one. Clause 1 asks for odd parity on x0 and x1. Clause 2 asks for even parity on x0 and a0.
+
+Now package the same information
+y = [x0, x1, x2, a0]^T
+
+B =
+[1 1 0 0]
+[1 0 0 1]
+[0 0 1 1]
+
+v = [1, 0, 1]^T
+Nothing new happened mathematically. We just compressed “many clause equations” into one matrix statement: B y = v (mod 2).
+
+Exact conversion
+Some families in the challenge naturally reduce to parity. With two mutually exclusive choices and a requirement to pick exactly one, XOR already says the right thing.
+
+ILP: x_auto_basic + x_auto_enhanced = 1
+XOR: x_auto_basic ⊕ x_auto_enhanced = 1
+Interpretation: the row of B would place 1s under those two variables, and the matching entry of v would be 1.
+
+Helper-bit conversion
+Constraints like incompatibilities and dependencies rarely become a single XOR clause on their own.
+
+ILP: x_gap + x_floater ≤ 1
+Not enough: x_gap ⊕ x_floater = ?
+Real path: helper bits + gadgets → several parity clauses
+Interpretation: the helper bits are bookkeeping variables that let the parity system remember the logic of the original inequality.
+
+What students should remember
+y = all bits. Start with the original decision bits and append helper bits only when needed.
+B = clause membership. Each row records which bits participate in one parity check.
+v = target parity. A 0 means even parity; a 1 means odd parity.
+Weights keep the optimization goal alive. The encoding must still prefer better feasible solutions, not just any feasible solution.
+"DQI = Interference-based: quantum mechanics + coding theory
+find good solutions without optimization."
+arXiv:2509.08328 · |Y>Quantum 2026 Hackathon · Sponsor Challenge Materials
+Decoded Quantum Interferometry
+DQI = Interference-based: quantum mechanics + coding theory find good solutions without optimization. Think of it like error correction in reverse.
+
+Industry Sponsor
+|
+Hardware Platform
+|
+Research Partner
+|
+|Y>Quantum 2026
+Section D
+The DQI Pipeline
+1
+ILP → max-XORSAT
+DQI cannot consume ordinary ILP constraints directly. We first rewrite the binary optimization problem as XOR parity checks over GF(2), the arithmetic of bits. Sections A-C unpack that translation slowly; this card is the short version.
+
+Σxi = 1
+→
+x1 ⊕ x2 = 1 (exact)
+Σxi ≤ 1
+→
+introduce helper bits + gadget clauses
+xa+xb ≤ 1
+→
+rewrite with ancillas, then parity checks
+Key insight: In GF(2), addition means XOR and 1 + 1 = 0. Some binary equalities convert exactly; harder inequalities need auxiliary bits so the parity system stays faithful to the original ILP.
+Student tip: If you find yourself saying "just take the inequality mod 2," stop. That usually throws away the information you care about. The gadget conversion exists to avoid that trap.
+Parity-check matrix B
+1 1 0 0 0
+1 0 1 0 0
+0 0 0 1 1
+1 0 0 0 1
+Constraint vector v
+1
+1
+0
+1
+Need the full story? Read Sections A-C first for the motivation, the GF(2) background, and the meaning of B y = v (mod 2).
+
+2
+Build & Run the DQI Circuit
+A single quantum circuit -- no optimization loop. The interference does the work.
+
+Step 1
+Dicke State
+Step 2
+Phase Encoding
+Step 3
+Syndrome Encoding
+Step 4
+Optional Decoder
+Step 5
+H + Measure
+Step 1: Dicke State Preparation
+Start with an equal superposition of all n-bit strings with exactly k ones:
+
+|Dn,k> = (1/√C(n,k)) Σ|x|=k |x>
+
+The weight k is chosen based on how many 1s we expect in the optimal solution. For weighted Dicke states, the amplitudes come from the principal eigenvector of a tridiagonal matrix.
+
+Analogy: Like dealing cards -- all possible hands of exactly k cards from a deck of n, held in quantum superposition at once.
+Show B-matrix overlay on circuit
+Animate quantum state flow
+3
+Post-Selection
+Measure all qubits. Keep only shots where the syndrome register reads 00...0.
+
+22
+kept (syndrome = 0)
+98
+discarded
+18%
+post-selection rate
+The kept shots are enriched in high-quality feasible solutions! Interference concentrates probability on good answers.
+
+Solution quality distribution
+
+Low quality
+High quality
+Re-simulate shots
+"DQI = Interference-based: quantum mechanics + coding theory
+find good solutions without optimization."
+arXiv:2509.08328 · |Y>Quantum 2026 Hackathon · Sponsor Challenge Materials
+Decoded Quantum Interferometry
+DQI = Interference-based: quantum mechanics + coding theory find good solutions without optimization. Think of it like error correction in reverse.
+
+Industry Sponsor
+|
+Hardware Platform
+|
+Research Partner
+|
+|Y>Quantum 2026
+Section E
+DQI vs QAOA -- The Key Difference
+QAOA
+Classical
+Optimizer
+Quantum
+Circuit
+γ, β
+⟨C⟩
+Repeat 100-1000x
+Variational: classical optimizer adjusts parameters γ, β over many iterations. Each iteration runs the quantum circuit and feeds expectation values back.
+
+Uses all measurements -- every shot contributes to the cost function estimate. But requires many circuit evaluations to converge.
+vs
+DQI
+Circuit
+Post-
+select
+✓
+ONE SHOT
+No optimization loop.
+Interference does the work.
+~10-30% of shots kept
+One-shot: build the circuit once, run it, post-select on the syndrome register. No classical optimization in the loop.
+
+Throws away many measurements (post-selection), but the kept shots are enriched in feasible, high-quality solutions via quantum interference.
+"DQI = Interference-based: quantum mechanics + coding theory
+find good solutions without optimization."
+arXiv:2509.08328 · |Y>Quantum 2026 Hackathon · Sponsor Challenge Materials
+Decoded Quantum Interferometry
+DQI = Interference-based: quantum mechanics + coding theory find good solutions without optimization. Think of it like error correction in reverse.
+
+Industry Sponsor
+|
+Hardware Platform
+|
+Research Partner
+|
+|Y>Quantum 2026
+Section F
+The Error Correction Analogy
+Expand: Why DQI looks like error correction in reverse
+DQI borrows its mathematical machinery directly from classical error correction. The parity check matrix B plays the same role as in LDPC codes, and the BP1-style decoding is literally one round of belief propagation -- the same algorithm used to decode 5G and Wi-Fi error-correcting codes.
+
+Classical Error Correction
+1
+Encode message with redundancy
+2
+Transmit through noisy channel
+3
+Compute syndrome = H · received
+4
+BP decoder fixes errors
+5
+Recover original message
+
+same
+math
+DQI for Optimization
+1
+Encode ILP as parity checks (B, v)
+2
+Quantum interference explores solutions
+3
+Syndrome = B
+T
+· y mod 2
+4
+Optional decoder steers toward feasibility
+5
+Post-select on syndrome = 0 → solution!
+The punchline: Instead of fixing errors in a transmitted message, DQI uses the same parity-check + decoding framework to find the best solution to an optimization problem. The "noise" is the search space; the "decoding" filters for feasibility.
+"DQI = Interference-based: quantum mechanics + coding theory
+find good solutions without optimization."
+arXiv:2509.08328 · |Y>Quantum 2026 Hackathon · Sponsor Challenge Materials
+
+QAOA vs DQI
+Head-to-Head Algorithm Comparison for P&C Insurance Bundling Optimization
+
+QAOA
+|Y>Quantum 2026
+DQI
+Section A
+Tale of Two Algorithms
+Hover over any cell for a deeper explanation.
+
+Read This Comparison in Three Passes
+Undergraduates usually get tripped up because quantum-computing comparisons mix three different questions:
+
+Idea: how the algorithm searches for good solutions.
+Per-circuit resources: qubits, depth, and two-qubit gates for one run.
+Total workflow cost: optimizer iterations for QAOA versus post-selection losses for DQI.
+Key Metrics
+Approximation ratio: quantum best / classical optimum.
+Feasibility rate: fraction of shots that decode to valid solutions.
+Post-selection rate: fraction of DQI shots with syndrome 0.
+Evidence Status
+QAOA is older and better studied. DQI is newer and promising, but its performance depends on the problem encoding, decoder choice, and noise model.
+
+QAOA
+VS
+DQI
+"Tune the circuit to find the answer"
+Iteratively adjust parameters to improve solution quality
+Philosophy
+"Let interference find the answer"
+Quantum interference naturally amplifies correct solutions
+Gradient descent on a quantum landscape
+Classical optimization of quantum expectation values
+Analogy
+Error correction in reverse
+Parity checks filter invalid solutions via syndrome measurement
+Variational (optimizer in the loop)
+Requires many circuit evaluations to converge
+Approach
+One-shot (no optimizer needed)
+Single circuit execution, then post-selection
+Cost layer (ZZPhase) + Mixer (Rx)
+Repeat p times: more layers = better approximation
+Circuit
+Dicke + Phase + Syndrome + Decoder
+Challenge pipeline: prepare, encode, compute syndrome, decode, measure
+2p tunable angles
+(gamma_1, beta_1, ..., gamma_p, beta_p)
+Parameters
+Zero tunable parameters!
+Circuit is fully determined by the problem structure
+This challenge: penalty terms in the cost Hamiltonian
+Add lambda * (constraint violation)^2 to the objective
+Constraints
+Parity check matrix (mod-2 encoding)
+Constraints encoded in binary matrix B
+All measurements are candidates
+Every shot returns a bitstring that can be evaluated
+Output
+Post-select: only syndrome=0 kept
+Shots with wrong syndrome are discarded
+Well-studied, tunable, uses all shots
+Large body of literature, flexible depth parameter
+Key Strength
+No optimization loop, interference-powered
+Avoids variational angle search
+Optimizer can get stuck
+Barren plateaus, many evaluations needed
+Key Weakness
+Lossy mod-2, throws away shots
+Post-selection success rate can be very low
+What is settled, and what is still open? QAOA is the more mature variational baseline. DQI is a newer decoding-based approach with strong structure-aware motivation, but it should be presented to students as a promising method to benchmark, not as a universally superior replacement.
+Section B
+Circuit Resource Comparison
+Click "Per-Package" to see the block-diagonal decomposition advantage. That view tracks the size of one package-local subproblem, not the full instance size.
+
+View:
+Total
+Per-Package
+Official benchmark sizes: n = 10, 21, 20, 50, 200. Per-package resources depend on N, so n does not increase monotonically with package-local difficulty.
+Values are estimated. Actual counts depend on implementation details and compiler optimizations.
+
+Section C
+The Scaling Question
+How does solution quality degrade as problem size grows? This panel is conceptual: it frames the question your team must answer with measured data rather than giving the final answer for you.
+
+Animate Scaling Curves
+At what n does one overtake the other?
+That's YOUR job to find out!
+Section D
+Decision Flowchart
+Click any node for tips on that step.
+
+START
+Solved classically?
+PuLP + solve_ilp()
+No
+Do that first!
+PuLP + solve_ilp()
+Yes
+Pick a problem size
+n=10: Both work well
+Validate pipeline
+n=21: Start seeing differences
+Track metrics carefully
+n=50+: Where it gets interesting
+Scaling differences emerge
+Run QAOA
+Run DQI
+Compare: quality, proxy efficiency, resources
+Plot scaling curves
+Analyze WHY they differ & Present!
+Section E
+What Judges Want to See
+●
+Strong Submission
+✓
+Ran both algorithms at 3+ problem sizes
+✓
+Validated against classical baseline (PuLP)
+✓
+Scaling plots with error bars from multiple seeds
+✓
+Explained WHY algorithms differ at each scale
+✓
+Exploited block-diagonal structure (M sub-problems)
+✓
+Reported circuit resource counts (qubits, gates, depth)
+✓
+Clean, reproducible code with clear documentation
+●
+Common Mistakes
+✗
+Only ran one algorithm (no comparison!)
+✗
+No classical baseline -- cannot compute approx. ratio
+✗
+Only tested at one problem size -- no scaling insight
+✗
+Reported numbers without explaining what they mean
+✗
+Ignored block-diagonal structure (wasted qubits)
+✗
+No error bars or statistical analysis
+|Y>Quantum 2026 — Sponsor Challenge Materials — yquantum.org
+
+|Y>Quantum 2026 — Scaling Analysis
+Insurance Bundling QUBO: Problem Size vs Quantum Resources
+QAOA
+DQI
+Classical
+Challenge
+A · Problem Size Explorer
+Read This Page Using Three Different Size Variables
+Full size n
+Total binary variables in the full benchmark instance. In this challenge, n = N x M.
+Package-local size N
+Variables inside one package block. Per-package quantum resources are driven mostly by N, not full n.
+Number of blocks M
+How many independent package sub-problems exist. Larger M raises total workflow cost even when per-block circuits stay small.
+Official benchmark set
+The tabs follow the challenge benchmark set 10, 21, 20, 50, 200. That order is not numerically sorted because each point uses a different (N,M) pair.
+
+n=10
+5 x 2
+
+n=21
+7 x 3
+
+n=20
+10 x 2
+
+n=50
+10 x 5
+
+n=200
+20 x 10
+n = 10  =  5 coverages × 2 packages
+Toy problem: both algorithms shine
+Coverages (N)
+Packages (M)
+P1
+P2
+QUBO Matrix Structure
+10 x 10 QUBO = 2 blocks of 5 x 5
+B · Resource Scaling
+These charts are illustrative teaching models, not compiler-certified hardware counts. QAOA lines show the logical problem register for one package-local subproblem. DQI lines include a simple syndrome/ancilla overhead model, so they should be read as “problem qubits + extra decoding workspace.”
+Logical Qubits per Sub-problem
+Two-Qubit Gate Count
+Circuit Depth
+Classical Solve Time (seconds)
+C · The Block-Diagonal Advantage
+1
+The full QUBO is 200 x 200 — looks like a 200-qubit nightmare.
+2
+But zoom in: it has 10 blocks of 20 x 20 on the diagonal. Off-diagonal? All zeros.
+3
+These blocks are INDEPENDENT! Each package is its own sub-problem.
+4
+Instead of one 200-variable logical problem register, work with ten 20-variable package-local subproblems.
+5
+The block structure reduces the logical problem register from 200 variables to 20 variables per package. Whether the full algorithm fits still depends on ancillas, syndrome qubits, and the hardware model.
+Play Animation
+Reset
+You do not automatically need a 200-qubit problem register.
+Under exact block decomposition, the package-local logical size is 20. Total hardware needs still depend on the algorithm and any ancilla/syndrome overhead.
+D · Scaling Summary
+The badges below are assumption-dependent teaching labels, not theorems. Read them as shorthand for the simple H1-era resource model used in the illustrative charts above.
+Size (n)	N x M	Sub-problems	Qubits / sub	QAOA Status*	DQI Status*	Classical Time	Notes
+n = 10	5 x 2	2 sub-problems of N=5	5	Easy	Easy	< 0.01s	Toy problem: both algorithms shine
+n = 21	7 x 3	3 sub-problems of N=7	7	Yes	Yes	< 0.01s	Real constraints appear
+n = 20	10 x 2	2 sub-problems of N=10	10	Yes	Tight on qubits	< 0.01s	More coverages, fewer packages
+n = 50	10 x 5	5 sub-problems of N=10	10	Yes	Challenging	< 0.01s	Mid-scale: real challenges emerge
+n = 200	20 x 10	10 sub-problems of N=20	20	H1 limit	Very challenging	< 0.1s	Full problem: the ultimate benchmark
