@@ -10,7 +10,8 @@
     "@neondatabase/serverless": "latest",
     "next": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "vercel": "^50.39.0"
   },
   "devDependencies": {
     "@types/node": "latest",
