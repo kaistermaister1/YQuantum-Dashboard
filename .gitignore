@@ -1,3 +1,6 @@
+# Nested clone of official challenge repo (separate git history)
+Travelers/
+
 node_modules
 .next
 out
