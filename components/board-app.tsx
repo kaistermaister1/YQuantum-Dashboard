@@ -1,6 +1,8 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState, useTransition } from "react";
+import Image from "next/image";
+import { useEffect, useMemo, useState } from "react";
+import qgarsImage from "@/qgars.png";
 import {
   BoardCard,
   DeckKey,
@@ -19,22 +21,70 @@ type BoardAppProps = {
   storageMode: StorageMode;
 };
 
-type DraftState = Record<DeckKey, { title: string; notes: string }>;
-
-type EditingState = {
-  id: string;
-  title: string;
-  notes: string;
-  deck: DeckKey;
+const DECK_SUBTEXT: Record<DeckKey, string> = {
+  team: "Shared Board",
+  kai: "Researcher Est 2012",
+  cayman: "Asian Workhorse",
+  peyton: "Master Qiskit",
+  will: "Abstract Thinker"
 };
 
-const EMPTY_DRAFTS = DECKS.reduce(
-  (accumulator, deck) => {
-    accumulator[deck.key] = { title: "", notes: "" };
-    return accumulator;
-  },
-  {} as DraftState
-);
+function DeckGlyph({ deck }: { deck: DeckKey }) {
+  switch (deck) {
+    case "team":
+      return (
+        <svg aria-hidden="true" className="deck-glyph" viewBox="0 0 24 24">
+          <rect x="4" y="5" width="6" height="6" rx="1.5" />
+          <rect x="14" y="5" width="6" height="6" rx="1.5" />
+          <rect x="4" y="13" width="6" height="6" rx="1.5" />
+          <rect x="14" y="13" width="6" height="6" rx="1.5" />
+        </svg>
+      );
+    case "kai":
+      return (
+        <svg aria-hidden="true" className="deck-glyph" viewBox="0 0 24 24">
+          <circle cx="10.5" cy="10.5" r="5.5" />
+          <path d="M15 15l4 4" />
+        </svg>
+      );
+    case "cayman":
+      return (
+        <svg aria-hidden="true" className="deck-glyph" viewBox="0 0 24 24">
+          <path d="M13 3L6 13h5l-1 8 8-11h-5l0-7z" />
+        </svg>
+      );
+    case "peyton":
+      return (
+        <svg aria-hidden="true" className="deck-glyph" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="2.1" />
+          <ellipse cx="12" cy="12" rx="8" ry="3.5" />
+          <ellipse cx="12" cy="12" rx="8" ry="3.5" transform="rotate(60 12 12)" />
+          <ellipse cx="12" cy="12" rx="8" ry="3.5" transform="rotate(120 12 12)" />
+        </svg>
+      );
+    case "will":
+      return (
+        <svg aria-hidden="true" className="deck-glyph" viewBox="0 0 24 24">
+          <path d="M12 4l7 4v8l-7 4-7-4V8l7-4z" />
+          <path d="M5 8l7 4 7-4" />
+          <path d="M12 12v8" />
+        </svg>
+      );
+  }
+}
+
+type CardModalState =
+  | {
+      mode: "create";
+      deck: DeckKey;
+      title: string;
+    }
+  | {
+      mode: "edit";
+      deck: DeckKey;
+      id: string;
+      title: string;
+    };
 
 function loadLocalCards() {
   if (typeof window === "undefined") {
@@ -60,16 +110,9 @@ function saveLocalCards(cards: BoardCard[]) {
 
 export function BoardApp({ storageMode }: BoardAppProps) {
   const [cards, setCards] = useState<BoardCard[]>([]);
-  const [drafts, setDrafts] = useState<DraftState>(EMPTY_DRAFTS);
-  const [editing, setEditing] = useState<EditingState | null>(null);
+  const [cardModal, setCardModal] = useState<CardModalState | null>(null);
   const [dragState, setDragState] = useState<{ cardId: string; deck: DeckKey } | null>(null);
   const [activeDrop, setActiveDrop] = useState<string | null>(null);
-  const [statusMessage, setStatusMessage] = useState("Ready to move cards.");
-  const [isSaving, startSavingTransition] = useTransition();
-
-  const lastSyncedText = useMemo(() => {
-    return storageMode === "remote" ? "Live sync every 3 seconds" : "Stored in this browser only";
-  }, [storageMode]);
 
   async function syncRemoteBoard() {
     const response = await fetch("/api/board", { cache: "no-store" });
@@ -84,9 +127,7 @@ export function BoardApp({ storageMode }: BoardAppProps) {
 
   useEffect(() => {
     if (storageMode === "local") {
-      const localCards = loadLocalCards();
-      setCards(localCards);
-      setStatusMessage("Local mode is on. Add a database when you're ready to share across laptops.");
+      setCards(loadLocalCards());
 
       const handleStorage = (event: StorageEvent) => {
         if (event.key === LOCAL_STORAGE_KEY) {
@@ -110,11 +151,10 @@ export function BoardApp({ storageMode }: BoardAppProps) {
         const payload = (await response.json()) as { cards: BoardCard[] };
         if (!cancelled) {
           setCards(sortCards(payload.cards));
-          setStatusMessage("Shared board is live. Changes from the team will keep rolling in.");
         }
-      } catch (error) {
+      } catch {
         if (!cancelled) {
-          setStatusMessage(error instanceof Error ? error.message : "Board sync failed.");
+          setCards([]);
         }
       }
     };
@@ -146,57 +186,31 @@ export function BoardApp({ storageMode }: BoardAppProps) {
     saveLocalCards(sorted);
   }
 
-  async function runRemoteMutation<T>(action: () => Promise<T>, successMessage: string) {
-    startSavingTransition(() => {
-      setStatusMessage("Saving changes...");
-    });
-
+  async function runRemoteMutation(action: () => Promise<void>) {
     try {
       await action();
       await syncRemoteBoard();
-      setStatusMessage(successMessage);
-    } catch (error) {
+    } catch {
       await syncRemoteBoard().catch(() => undefined);
-      setStatusMessage(error instanceof Error ? error.message : "Something went wrong.");
     }
   }
 
-  function setDraft(deck: DeckKey, field: "title" | "notes", value: string) {
-    setDrafts((current) => ({
-      ...current,
-      [deck]: {
-        ...current[deck],
-        [field]: value
-      }
-    }));
-  }
+  async function createCardInDeck(deck: DeckKey, title: string) {
+    const nextTitle = title.trim();
 
-  async function handleCreate(deck: DeckKey, event: FormEvent) {
-    event.preventDefault();
-    const draft = drafts[deck];
-    const title = draft.title.trim();
-    const notes = draft.notes.trim();
-
-    if (!title) {
-      setStatusMessage("A card needs a title before it can land on the board.");
+    if (!nextTitle) {
       return;
     }
 
     const newCard = createLocalCard({
       deck,
-      title,
-      notes,
+      title: nextTitle,
+      notes: "",
       position: computeInsertedPosition(deckMap[deck], deckMap[deck].length)
     });
 
-    setDrafts((current) => ({
-      ...current,
-      [deck]: { title: "", notes: "" }
-    }));
-
     if (storageMode === "local") {
       updateLocalCards([...cards, newCard]);
-      setStatusMessage(`Added a card to ${DECKS.find((entry) => entry.key === deck)?.label}.`);
       return;
     }
 
@@ -209,8 +223,8 @@ export function BoardApp({ storageMode }: BoardAppProps) {
         body: JSON.stringify({
           id: newCard.id,
           deck,
-          title,
-          notes,
+          title: nextTitle,
+          notes: "",
           position: newCard.position
         })
       });
@@ -218,10 +232,10 @@ export function BoardApp({ storageMode }: BoardAppProps) {
       if (!response.ok) {
         throw new Error("Could not create that card.");
       }
-    }, `Added a card to ${DECKS.find((entry) => entry.key === deck)?.label}.`);
+    });
   }
 
-  async function saveCard(cardId: string, updates: Partial<Pick<BoardCard, "title" | "notes" | "deck" | "position">>, successMessage: string) {
+  async function saveCard(cardId: string, updates: Partial<Pick<BoardCard, "title" | "deck" | "position">>) {
     if (storageMode === "local") {
       updateLocalCards(
         cards.map((card) =>
@@ -234,7 +248,6 @@ export function BoardApp({ storageMode }: BoardAppProps) {
             : card
         )
       );
-      setStatusMessage(successMessage);
       return;
     }
 
@@ -262,19 +275,16 @@ export function BoardApp({ storageMode }: BoardAppProps) {
       if (!response.ok) {
         throw new Error("Could not save that card.");
       }
-    }, successMessage);
+    });
   }
 
-  async function handleDelete(cardId: string) {
+  async function deleteCardById(cardId: string) {
     if (storageMode === "local") {
       updateLocalCards(cards.filter((card) => card.id !== cardId));
-      setEditing(null);
-      setStatusMessage("Card removed.");
       return;
     }
 
     setCards((current) => current.filter((card) => card.id !== cardId));
-    setEditing(null);
 
     await runRemoteMutation(async () => {
       const response = await fetch(`/api/cards/${cardId}`, {
@@ -284,7 +294,7 @@ export function BoardApp({ storageMode }: BoardAppProps) {
       if (!response.ok) {
         throw new Error("Could not delete that card.");
       }
-    }, "Card removed.");
+    });
   }
 
   async function moveCard(cardId: string, targetDeck: DeckKey, insertIndex: number) {
@@ -299,67 +309,49 @@ export function BoardApp({ storageMode }: BoardAppProps) {
     );
     const nextPosition = computeInsertedPosition(destinationCards, insertIndex);
 
-    await saveCard(
-      cardId,
-      {
-        deck: targetDeck,
-        position: nextPosition
-      },
-      `Moved card to ${DECKS.find((deck) => deck.key === targetDeck)?.label}.`
-    );
+    await saveCard(cardId, {
+      deck: targetDeck,
+      position: nextPosition
+    });
   }
 
   return (
     <main className="page-shell">
       <div className="page-frame">
-        <section className="hero">
-          <p className="eyebrow">YQuantum shared workflow</p>
-          <h1>Five decks, one board, and zero deploy-related data wipes.</h1>
-          <p className="hero-copy">
-            This board is set up for `Team`, `Kai`, `Cayman`, `Peyton`, and `Will`. In shared mode it keeps card
-            data outside the codebase, so updating the site won&apos;t erase the actual work.
-          </p>
-          <div className="hero-meta">
-            <span className="pill pill-strong">{storageMode === "remote" ? "Shared database mode" : "Local browser mode"}</span>
-            <span className="pill">{lastSyncedText}</span>
-            <span className="pill">{isSaving ? "Saving..." : "Ready"}</span>
+        <header className="page-header">
+          <div className="page-header-copy">
+            <h1>YQuantum 2026</h1>
+            <p className="page-quote">"If I have seen further it is by standing on the shoulders of Giants." - Issac Newton</p>
           </div>
-        </section>
+          <div className="page-header-mark">
+            <Image
+              src={qgarsImage}
+              alt="Q-gars"
+              width={520}
+              height={154}
+              priority
+              className="qgars-mark"
+            />
+          </div>
+        </header>
 
         <section className="boards-wrap">
           <div className="boards-grid">
             {DECKS.map((deck) => {
               const deckCards = deckMap[deck.key];
+
               return (
                 <section className="deck" data-color={deck.key} key={deck.key}>
                   <header className="deck-head">
                     <div>
                       <h2 className="deck-title">{deck.label}</h2>
-                      <p className="deck-subtitle">{deck.subtitle}</p>
+                      <p className="deck-subtitle">
+                        <DeckGlyph deck={deck.key} />
+                        <span>{DECK_SUBTEXT[deck.key]}</span>
+                      </p>
                     </div>
                     <div className="count-badge">{deckCards.length}</div>
                   </header>
-
-                  <form className="composer" onSubmit={(event) => void handleCreate(deck.key, event)}>
-                    <input
-                      className="input"
-                      value={drafts[deck.key].title}
-                      onChange={(event) => setDraft(deck.key, "title", event.target.value)}
-                      placeholder={`Add a card to ${deck.label}`}
-                      maxLength={120}
-                    />
-                    <textarea
-                      className="textarea"
-                      value={drafts[deck.key].notes}
-                      onChange={(event) => setDraft(deck.key, "notes", event.target.value)}
-                      placeholder="Notes, links, context, next step..."
-                    />
-                    <div className="composer-row">
-                      <button className="button button-primary" type="submit">
-                        Add card
-                      </button>
-                    </div>
-                  </form>
 
                   <div className="cards">
                     <div
@@ -386,6 +378,14 @@ export function BoardApp({ storageMode }: BoardAppProps) {
                           className="card"
                           data-dragging={dragState?.cardId === card.id}
                           draggable
+                          onClick={() =>
+                            setCardModal({
+                              mode: "edit",
+                              deck: card.deck,
+                              id: card.id,
+                              title: card.title
+                            })
+                          }
                           onDragStart={() => {
                             setDragState({ cardId: card.id, deck: card.deck });
                           }}
@@ -395,47 +395,6 @@ export function BoardApp({ storageMode }: BoardAppProps) {
                           }}
                         >
                           <h3 className="card-title">{card.title}</h3>
-                          {card.notes ? <p className="card-notes">{card.notes}</p> : null}
-                          <div className="card-row">
-                            <button
-                              className="mini-button"
-                              type="button"
-                              onClick={() =>
-                                setEditing({
-                                  id: card.id,
-                                  title: card.title,
-                                  notes: card.notes,
-                                  deck: card.deck
-                                })
-                              }
-                            >
-                              Edit
-                            </button>
-                            <button
-                              className="mini-button"
-                              type="button"
-                              onClick={() => {
-                                const currentIndex = deckCards.findIndex((entry) => entry.id === card.id);
-                                if (currentIndex > 0) {
-                                  void moveCard(card.id, deck.key, currentIndex - 1);
-                                }
-                              }}
-                            >
-                              Up
-                            </button>
-                            <button
-                              className="mini-button"
-                              type="button"
-                              onClick={() => {
-                                const currentIndex = deckCards.findIndex((entry) => entry.id === card.id);
-                                if (currentIndex < deckCards.length - 1) {
-                                  void moveCard(card.id, deck.key, currentIndex + 2);
-                                }
-                              }}
-                            >
-                              Down
-                            </button>
-                          </div>
                         </article>
 
                         <div
@@ -459,100 +418,99 @@ export function BoardApp({ storageMode }: BoardAppProps) {
                         />
                       </div>
                     ))}
-
-                    {deckCards.length === 0 ? (
-                      <div className="deck-empty">
-                        Drag cards here or add the first one above.
-                        <br />
-                        The deck will stay in place even when the board is empty.
-                      </div>
-                    ) : null}
                   </div>
+
+                  <button
+                    className="add-button"
+                    type="button"
+                    onClick={() =>
+                      setCardModal({
+                        mode: "create",
+                        deck: deck.key,
+                        title: ""
+                      })
+                    }
+                  >
+                    <span className="add-button-icon" aria-hidden="true">
+                      +
+                    </span>
+                    <span>Add card</span>
+                  </button>
                 </section>
               );
             })}
           </div>
         </section>
-
-        <section className="status">
-          <p className="status-note">
-            <strong>Status:</strong> {statusMessage}
-            {storageMode === "local" ? " Add a database URL when you're ready for shared edits across laptops." : null}
-          </p>
-        </section>
       </div>
 
-      {editing ? (
-        <div className="overlay" role="presentation" onClick={() => setEditing(null)}>
+      {cardModal ? (
+        <div className="overlay" role="presentation" onClick={() => setCardModal(null)}>
           <div className="modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-            <h2>Edit card</h2>
-            <div className="modal-grid">
-              <input
-                className="input"
-                value={editing.title}
-                onChange={(event) =>
-                  setEditing((current) => (current ? { ...current, title: event.target.value } : current))
+            <h2>{cardModal.mode === "create" ? "Add card" : "Edit card"}</h2>
+            <input
+              autoFocus
+              className="input"
+              value={cardModal.title}
+              onChange={(event) =>
+                setCardModal((current) => (current ? { ...current, title: event.target.value } : current))
+              }
+              placeholder="Task title"
+              maxLength={120}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" || !cardModal.title.trim()) {
+                  return;
                 }
-                placeholder="Card title"
-                maxLength={120}
-              />
-              <textarea
-                className="textarea"
-                value={editing.notes}
-                onChange={(event) =>
-                  setEditing((current) => (current ? { ...current, notes: event.target.value } : current))
+
+                event.preventDefault();
+
+                if (cardModal.mode === "create") {
+                  void createCardInDeck(cardModal.deck, cardModal.title);
+                } else {
+                  void saveCard(cardModal.id, { title: cardModal.title.trim() });
                 }
-                placeholder="Notes"
-              />
-              <select
-                className="select"
-                value={editing.deck}
-                onChange={(event) => {
-                  const nextDeck = event.target.value;
-                  if (isDeckKey(nextDeck)) {
-                    setEditing((current) => (current ? { ...current, deck: nextDeck } : current));
-                  }
-                }}
-              >
-                {DECKS.map((deck) => (
-                  <option key={deck.key} value={deck.key}>
-                    {deck.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+
+                setCardModal(null);
+              }}
+            />
 
             <div className="modal-actions">
-              <button className="button button-alert" type="button" onClick={() => void handleDelete(editing.id)}>
-                Delete card
-              </button>
+              {cardModal.mode === "edit" ? (
+                <button
+                  className="button button-alert"
+                  type="button"
+                  onClick={async () => {
+                    await deleteCardById(cardModal.id);
+                    setCardModal(null);
+                  }}
+                >
+                  Delete
+                </button>
+              ) : (
+                <span />
+              )}
+
               <div className="modal-actions-right">
-                <button className="button button-soft" type="button" onClick={() => setEditing(null)}>
-                  Close
+                <button className="button button-soft" type="button" onClick={() => setCardModal(null)}>
+                  Cancel
                 </button>
                 <button
                   className="button button-primary"
                   type="button"
                   onClick={async () => {
-                    const nextDeckCards = cardsForDeck(
-                      cards.filter((card) => card.id !== editing.id || card.deck !== editing.deck),
-                      editing.deck
-                    );
+                    if (!cardModal.title.trim()) {
+                      return;
+                    }
 
-                    await saveCard(
-                      editing.id,
-                      {
-                        title: editing.title.trim() || "Untitled card",
-                        notes: editing.notes.trim(),
-                        deck: editing.deck,
-                        position: computeInsertedPosition(nextDeckCards, nextDeckCards.length)
-                      },
-                      "Card updated."
-                    );
-                    setEditing(null);
+                    if (cardModal.mode === "create") {
+                      await createCardInDeck(cardModal.deck, cardModal.title);
+                    } else {
+                      await saveCard(cardModal.id, { title: cardModal.title.trim() });
+                    }
+
+                    setCardModal(null);
                   }}
                 >
-                  Save changes
+                  {cardModal.mode === "create" ? "Add" : "Save"}
                 </button>
               </div>
             </div>

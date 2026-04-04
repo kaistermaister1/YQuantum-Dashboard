@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "YQuantum Board",
+  title: "YQuantum // Q-gars 2026",
   description: "Five-deck collaborative kanban board for the YQuantum team."
 };
 
