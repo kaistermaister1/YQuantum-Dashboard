@@ -318,6 +318,12 @@ export function BoardApp({ storageMode }: BoardAppProps) {
   return (
     <main className="page-shell">
       <div className="page-frame">
+        <nav className="top-tabs" aria-label="Workspace sections">
+          <button type="button" className="top-tab top-tab-active" aria-current="page">
+            Home
+          </button>
+        </nav>
+
         <header className="page-header">
           <div className="page-header-copy">
             <h1>YQuantum 2026</h1>
