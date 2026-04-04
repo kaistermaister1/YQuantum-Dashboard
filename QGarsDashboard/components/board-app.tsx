@@ -1,8 +1,6 @@
 "use client";
 
-import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
-import qgarsImage from "@/qgars.png";
 import {
   BoardCard,
   DeckKey,
@@ -328,16 +326,6 @@ export function BoardApp({ storageMode }: BoardAppProps) {
           <div className="page-header-copy">
             <h1>YQuantum 2026</h1>
             <p className="page-quote">"If I have seen further it is by standing on the shoulders of Giants." - Issac Newton</p>
-          </div>
-          <div className="page-header-mark">
-            <Image
-              src={qgarsImage}
-              alt="Q-gars"
-              width={520}
-              height={154}
-              priority
-              className="qgars-mark"
-            />
           </div>
         </header>
 

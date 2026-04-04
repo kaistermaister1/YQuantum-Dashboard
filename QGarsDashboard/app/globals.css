@@ -26,6 +26,73 @@ body {
   color: var(--ink);
   font-family: "Avenir Next", "Segoe UI", sans-serif;
   overflow-y: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Global partnership strip (root layout) */
+.collaboration-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px 20px;
+  padding: 10px 20px 12px;
+  background: rgba(255, 250, 242, 0.88);
+  border-bottom: 1px solid rgba(23, 20, 17, 0.08);
+  box-shadow: 0 6px 20px rgba(23, 20, 17, 0.06);
+}
+
+.collaboration-strip__cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 14px 18px;
+}
+
+.collaboration-strip__cluster--sponsors {
+  padding: 2px 0;
+}
+
+.collaboration-strip__qgars {
+  display: block;
+  height: 36px;
+  width: auto;
+  max-width: min(200px, 42vw);
+  object-fit: contain;
+  object-position: left center;
+  filter: grayscale(1) contrast(1.05);
+  opacity: 0.92;
+}
+
+.collaboration-strip__times {
+  flex-shrink: 0;
+  font-size: 1.65rem;
+  font-weight: 300;
+  line-height: 1;
+  color: rgba(23, 20, 17, 0.38);
+  user-select: none;
+  padding: 0 4px;
+}
+
+.collaboration-strip__sponsor-lockup {
+  display: inline-flex;
+  align-items: center;
+}
+
+.collaboration-strip__sponsor-logo {
+  display: block;
+  width: auto;
+  object-fit: contain;
+}
+
+.collaboration-strip__sponsor-logo--travelers {
+  height: 34px;
+}
+
+.collaboration-strip__sponsor-logo--ltm {
+  height: 28px;
 }
 
 button,
@@ -38,8 +105,8 @@ button {
 }
 
 .page-shell {
-  height: 100vh;
-  min-height: 100vh;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
   padding: 20px;
 }
@@ -70,13 +137,6 @@ button {
   padding-top: 8px;
 }
 
-.page-header-mark {
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
-}
-
 .page-header h1 {
   margin: 0;
   font-family: Georgia, "Palatino Linotype", serif;
@@ -91,12 +151,6 @@ button {
   color: var(--muted);
   font-size: 0.95rem;
   line-height: 1.45;
-}
-
-.qgars-mark {
-  width: min(26vw, 300px);
-  height: auto;
-  filter: drop-shadow(0 14px 24px rgba(23, 20, 17, 0.16));
 }
 
 .top-tabs {
@@ -394,9 +448,5 @@ button {
 
   .boards-grid {
     min-width: 1180px;
-  }
-
-  .qgars-mark {
-    width: 160px;
   }
 }
