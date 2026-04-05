@@ -1,0 +1,2 @@
+run_id,algorithm,optimizer,status,runtime_sec,profit
+classical_na_na_n5_m2_pna_20260405T093602Z,classical,,Optimal,0.021527208999032155,710.490566944

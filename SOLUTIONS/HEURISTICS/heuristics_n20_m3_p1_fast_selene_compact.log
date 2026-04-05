@@ -1,0 +1,34 @@
+Already logged in. Tokens are valid.
+[package 1] Selene batched θ search (random): 8 circuits in one execute(), p=1, shots=48
+[package 2] Selene batched θ search (random): 8 circuits in one execute(), p=1, shots=48
+[package 3] Selene batched θ search (random): 8 circuits in one execute(), p=1, shots=48
+[package 1] eval 1: mean_energy=35682.093867, best_mean=35682.093867, best_sample=5447.436733, elapsed=148.84s (batched random new best)
+[package 1] eval 2: mean_energy=28152.689360, best_mean=28152.689360, best_sample=1130.424076, elapsed=0.00s (batched random new best)
+[package 1] eval 3: mean_energy=25713.917418, best_mean=25713.917418, best_sample=1812.347179, elapsed=0.00s (batched random new best)
+[package 1] eval 4: mean_energy=26988.747575, best_mean=25713.917418, best_sample=1855.755068, elapsed=0.00s (batched random)
+[package 1] eval 5: mean_energy=26475.289481, best_mean=25713.917418, best_sample=628.651184, elapsed=0.00s (batched random)
+[package 1] eval 6: mean_energy=27388.871170, best_mean=25713.917418, best_sample=1130.424076, elapsed=0.00s (batched random)
+[package 1] eval 7: mean_energy=28957.162744, best_mean=25713.917418, best_sample=1130.424076, elapsed=0.00s (batched random)
+[package 1] eval 8: mean_energy=23602.904262, best_mean=23602.904262, best_sample=2360.487347, elapsed=0.00s (batched random new best)
+[package 1] Batched θ search done: best_mean=23602.904262 (8 evals, 148.84s wall)
+[package 2] eval 1: mean_energy=40893.629197, best_mean=40893.629197, best_sample=248.889927, elapsed=210.28s (batched random new best)
+[package 2] eval 2: mean_energy=37640.023223, best_mean=37640.023223, best_sample=466.751623, elapsed=0.00s (batched random new best)
+[package 2] eval 3: mean_energy=44033.902460, best_mean=37640.023223, best_sample=918.487167, elapsed=0.00s (batched random)
+[package 2] eval 4: mean_energy=36711.013367, best_mean=36711.013367, best_sample=2237.595861, elapsed=0.00s (batched random new best)
+[package 2] eval 5: mean_energy=41519.874105, best_mean=36711.013367, best_sample=2585.148668, elapsed=0.00s (batched random)
+[package 2] eval 6: mean_energy=34556.036183, best_mean=34556.036183, best_sample=1571.332791, elapsed=0.00s (batched random new best)
+[package 2] eval 7: mean_energy=39304.816689, best_mean=34556.036183, best_sample=251.916086, elapsed=0.00s (batched random)
+[package 2] eval 8: mean_energy=36119.840834, best_mean=34556.036183, best_sample=248.889927, elapsed=0.00s (batched random)
+[package 2] Batched θ search done: best_mean=34556.036183 (8 evals, 210.28s wall)
+[package 3] eval 1: mean_energy=52813.726767, best_mean=52813.726767, best_sample=6297.874612, elapsed=269.29s (batched random new best)
+[package 3] eval 2: mean_energy=59063.994954, best_mean=52813.726767, best_sample=2259.889992, elapsed=0.00s (batched random)
+[package 3] eval 3: mean_energy=34157.789622, best_mean=34157.789622, best_sample=433.515456, elapsed=0.00s (batched random new best)
+[package 3] eval 4: mean_energy=53761.533869, best_mean=34157.789622, best_sample=3002.633006, elapsed=0.00s (batched random)
+[package 3] eval 5: mean_energy=60118.912976, best_mean=34157.789622, best_sample=1596.139496, elapsed=0.00s (batched random)
+[package 3] eval 6: mean_energy=56292.500767, best_mean=34157.789622, best_sample=2259.889992, elapsed=0.00s (batched random)
+[package 3] eval 7: mean_energy=54932.012021, best_mean=34157.789622, best_sample=1528.047932, elapsed=0.00s (batched random)
+[package 3] eval 8: mean_energy=114088.366168, best_mean=34157.789622, best_sample=367.442430, elapsed=0.00s (batched random)
+[package 3] Batched θ search done: best_mean=34157.789622 (8 evals, 269.29s wall)
+Saved summary to SOLUTIONS/HEURISTICS/summaries/qaoa_selene_random_batch_n20_m3_p1_cq1_fs1_lamx3_515p360102-669p59724-921p694313_20260405T093432Z_summary.csv
+Saved solution to SOLUTIONS/HEURISTICS/solutions/qaoa_selene_random_batch_n20_m3_p1_cq1_fs1_lamx3_515p360102-669p59724-921p694313_20260405T093432Z_solution.csv
+Saved history to SOLUTIONS/HEURISTICS/histories/qaoa_selene_random_batch_n20_m3_p1_cq1_fs1_lamx3_515p360102-669p59724-921p694313_20260405T093432Z_history.csv

@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -31,9 +33,11 @@ N_COVERAGES = 4
 M_PACKAGES = 2
 P_DEPTH = 1
 QAOA_EXECUTION_TARGET = "local"  # "local" or "selene"
-QAOA_OPTIMIZER = "cobyla"  # "cobyla" or "spsa"
+QAOA_OPTIMIZER = "spsa"  # "cobyla" or "spsa"
 SEED = 0
 GENERATE_TRAINING_LOSS_PLOT = False
+# On Selene, subsamples with N×M at or below this use regular SPSA/COBYLA unless --force-fast-selene.
+SELENE_FAST_SELENE_MIN_NM = 41
 
 SUMMARY_FIELDS = [
     "run_id",
@@ -155,12 +159,16 @@ def _build_run_id(
     target: str | None,
     optimizer: str | None,
     lambda_token: str | None = None,
+    compact_qubo: bool = False,
+    fast_selene: bool = False,
 ) -> str:
     p_token = "na" if p is None else str(p)
     target_token = target if target is not None else "na"
     optimizer_token = optimizer if optimizer is not None else "na"
+    cq_part = "_cq1" if compact_qubo else ""
+    fs_part = "_fs1" if fast_selene else ""
     lambda_part = f"_{lambda_token}" if lambda_token else ""
-    return f"{algorithm}_{target_token}_{optimizer_token}_n{n}_m{m}_p{p_token}{lambda_part}_{_utc_timestamp()}"
+    return f"{algorithm}_{target_token}_{optimizer_token}_n{n}_m{m}_p{p_token}{cq_part}{fs_part}{lambda_part}_{_utc_timestamp()}"
 
 
 def _format_lambda_field(lambda_values: Sequence[float]) -> str:
@@ -326,21 +334,48 @@ def _run_qaoa(
     histories_dir: Path,
     solutions_dir: Path,
     generate_training_loss_plot: bool,
+    compact_qubo: bool = False,
+    *,
+    shots: int | None = None,
+    cobyla_maxiter: int | None = None,
+    spsa_maxiter: int | None = None,
+    fast_selene: bool = False,
+    fast_selene_trials: int = 10,
+    fast_selene_strategy: str = "random",
 ) -> dict[str, Any]:
     if optimizer not in {"cobyla", "spsa"}:
         raise ValueError("optimizer must be 'cobyla' or 'spsa'")
+    if fast_selene:
+        if execution_target != "selene":
+            raise ValueError("--fast-selene requires --target selene")
+        if fast_selene_strategy == "grid" and p != 1:
+            raise ValueError("--fast-selene-strategy grid requires --p 1")
+        if fast_selene_strategy not in {"random", "grid"}:
+            raise ValueError("fast_selene_strategy must be 'random' or 'grid'")
+        if fast_selene_strategy == "random" and fast_selene_trials < 1:
+            raise ValueError("--fast-selene-trials must be at least 1")
 
     problem = qaoa.subsample_problem(qaoa.load_ltm_instance(qaoa.DATA_DIR), n_coverages=n, m_packages=m)
-    blocks = [qaoa.build_qubo_block_for_package(problem, package_index) for package_index in range(problem.M)]
+    blocks = [
+        qaoa.build_qubo_block_for_package(problem, package_index, compact_penalties=compact_qubo)
+        for package_index in range(problem.M)
+    ]
     lambda_values = [block.penalty_weight for block in blocks]
+    effective_optimizer = (
+        ("grid_batch" if fast_selene_strategy == "grid" else "random_batch")
+        if fast_selene
+        else optimizer
+    )
     run_id = _build_run_id(
         "qaoa",
         n=n,
         m=m,
         p=p,
         target=execution_target,
-        optimizer=optimizer,
+        optimizer=effective_optimizer,
         lambda_token=_build_lambda_token(lambda_values),
+        compact_qubo=compact_qubo,
+        fast_selene=fast_selene,
     )
     stem = run_id
     workflow_start = time.perf_counter()
@@ -355,22 +390,39 @@ def _run_qaoa(
     history_rows: list[dict[str, Any]] = []
     plot_series: list[tuple[str, list[float], list[float]]] = []
 
+    effective_shots_override = shots if shots is not None else (48 if fast_selene else None)
+
     session = None
     original_qaoa_optimizer = qaoa.OPTIMIZER
     original_selene_optimizer = qaoa_selene.OPTIMIZER
+    original_qaoa_shots = qaoa.SHOTS
+    original_selene_shots = qaoa_selene.SHOTS
+    original_qaoa_cobyla = qaoa.COBYLA_MAXITER
+    original_selene_cobyla = qaoa_selene.COBYLA_MAXITER
+    original_qaoa_spsa = qaoa.SPSA_MAXITER
+    original_selene_spsa = qaoa_selene.SPSA_MAXITER
+    original_selene_parallel = qaoa_selene.MAX_PARALLEL_PACKAGES
     try:
         qaoa.OPTIMIZER = optimizer
         qaoa_selene.OPTIMIZER = optimizer
+        if fast_selene:
+            qaoa_selene.MAX_PARALLEL_PACKAGES = max(1, len(blocks))
+        if effective_shots_override is not None:
+            qaoa.SHOTS = int(effective_shots_override)
+            qaoa_selene.SHOTS = int(effective_shots_override)
+        if cobyla_maxiter is not None:
+            qaoa.COBYLA_MAXITER = int(cobyla_maxiter)
+            qaoa_selene.COBYLA_MAXITER = int(cobyla_maxiter)
+        if spsa_maxiter is not None:
+            qaoa.SPSA_MAXITER = int(spsa_maxiter)
+            qaoa_selene.SPSA_MAXITER = int(spsa_maxiter)
         if execution_target == "selene":
             session = qaoa_selene.SeleneSession.create(project_name=qaoa_selene.NEXUS_PROJECT)
 
-        for package_index, block in enumerate(blocks):
-            package_name = (
-                problem.package_names[package_index]
-                if problem.package_names and package_index < len(problem.package_names)
-                else f"package {package_index + 1}"
-            )
+        use_parallel_selene = fast_selene and execution_target == "selene" and len(blocks) > 1
+        hist_lock = threading.Lock()
 
+        def on_eval_factory(package_name: str):
             def on_evaluation(
                 callback_block: qaoa.QuboBlock,
                 evaluation_index: int,
@@ -382,40 +434,69 @@ def _run_qaoa(
                 nonlocal num_samples_total, num_samples_feasible, num_objective_evals
                 shots_total = int(sum(stats.bitstring_counts.values()))
                 shots_feasible = _count_feasible_samples(stats.bitstring_counts, problem.N, is_feasible)
-                num_samples_total += shots_total
-                num_samples_feasible += shots_feasible
-                num_objective_evals += 1
-                history_rows.append(
-                    {
-                        "run_id": run_id,
-                        "algorithm": "qaoa",
-                        "execution_target": execution_target,
-                        "optimizer": optimizer,
-                        "package_index": int(callback_block.package_index),
-                        "package_name": package_name,
-                        "evaluation_index": int(evaluation_index),
-                        "objective_value": float(value),
-                        "best_objective": float(best_objective),
-                        "best_bitstring": stats.best_bitstring,
-                        "coverage_bitstring": stats.best_bitstring[: problem.N],
-                        "best_qubo_energy": float(stats.best_qubo_energy),
-                        "shots_total": shots_total,
-                        "shots_feasible": shots_feasible,
-                        "improved": int(bool(improved)),
-                    }
-                )
+                row = {
+                    "run_id": run_id,
+                    "algorithm": "qaoa",
+                    "execution_target": execution_target,
+                    "optimizer": effective_optimizer,
+                    "package_index": int(callback_block.package_index),
+                    "package_name": package_name,
+                    "evaluation_index": int(evaluation_index),
+                    "objective_value": float(value),
+                    "best_objective": float(best_objective),
+                    "best_bitstring": stats.best_bitstring,
+                    "coverage_bitstring": stats.best_bitstring[: problem.N],
+                    "best_qubo_energy": float(stats.best_qubo_energy),
+                    "shots_total": shots_total,
+                    "shots_feasible": shots_feasible,
+                    "improved": int(bool(improved)),
+                }
+                if use_parallel_selene:
+                    with hist_lock:
+                        num_samples_total += shots_total
+                        num_samples_feasible += shots_feasible
+                        num_objective_evals += 1
+                        history_rows.append(row)
+                else:
+                    num_samples_total += shots_total
+                    num_samples_feasible += shots_feasible
+                    num_objective_evals += 1
+                    history_rows.append(row)
 
+            return on_evaluation
+
+        def solve_package(
+            package_index: int, block: qaoa.QuboBlock
+        ) -> tuple[int, np.ndarray, tuple[str, list[float], list[float]] | None]:
+            package_name = (
+                problem.package_names[package_index]
+                if problem.package_names and package_index < len(problem.package_names)
+                else f"package {package_index + 1}"
+            )
+            on_evaluation = on_eval_factory(package_name)
             if execution_target == "selene":
                 if session is None:
                     raise RuntimeError("Expected an active Selene session")
-                result = qaoa_selene.optimize_block_selene(
-                    session=session,
-                    block=block,
-                    p=p,
-                    shots=qaoa_selene.SHOTS,
-                    seed=seed + package_index * 1000,
-                    evaluation_callback=on_evaluation,
-                )
+                if fast_selene:
+                    result = qaoa_selene.optimize_block_batched_theta_search_selene(
+                        session=session,
+                        block=block,
+                        p=p,
+                        shots=qaoa_selene.SHOTS,
+                        seed=seed + package_index * 1000,
+                        n_trials=int(fast_selene_trials),
+                        strategy=fast_selene_strategy,
+                        evaluation_callback=on_evaluation,
+                    )
+                else:
+                    result = qaoa_selene.optimize_block_selene(
+                        session=session,
+                        block=block,
+                        p=p,
+                        shots=qaoa_selene.SHOTS,
+                        seed=seed + package_index * 1000,
+                        evaluation_callback=on_evaluation,
+                    )
             else:
                 result = qaoa.optimize_block(
                     block,
@@ -425,19 +506,46 @@ def _run_qaoa(
                     execution_target=execution_target,
                     evaluation_callback=on_evaluation,
                 )
-
             coverage_bits = np.array([int(char) for char in result.stats.best_bitstring[: problem.N]], dtype=int)
-            x_matrix[:, package_index] = coverage_bits
-            plot_series.append(
-                (
+            plot_entry: tuple[str, list[float], list[float]] | None = None
+            if generate_training_loss_plot:
+                plot_entry = (
                     package_name,
-                    result.trace.objective_values,
-                    result.trace.best_objective_values,
+                    list(result.trace.objective_values),
+                    list(result.trace.best_objective_values),
                 )
-            )
+            return package_index, coverage_bits, plot_entry
+
+        if use_parallel_selene:
+            outcomes: list[tuple[int, np.ndarray, tuple[str, list[float], list[float]] | None]] = []
+            workers = min(qaoa_selene.MAX_PARALLEL_PACKAGES, len(blocks))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [
+                    executor.submit(solve_package, package_index, block)
+                    for package_index, block in enumerate(blocks)
+                ]
+                for future in as_completed(futures):
+                    outcomes.append(future.result())
+            for package_index, coverage_bits, plot_entry in outcomes:
+                x_matrix[:, package_index] = coverage_bits
+                if plot_entry is not None:
+                    plot_series.append(plot_entry)
+        else:
+            for package_index, block in enumerate(blocks):
+                _, coverage_bits, plot_entry = solve_package(package_index, block)
+                x_matrix[:, package_index] = coverage_bits
+                if plot_entry is not None:
+                    plot_series.append(plot_entry)
     finally:
         qaoa.OPTIMIZER = original_qaoa_optimizer
         qaoa_selene.OPTIMIZER = original_selene_optimizer
+        qaoa.SHOTS = original_qaoa_shots
+        qaoa_selene.SHOTS = original_selene_shots
+        qaoa.COBYLA_MAXITER = original_qaoa_cobyla
+        qaoa_selene.COBYLA_MAXITER = original_selene_cobyla
+        qaoa.SPSA_MAXITER = original_qaoa_spsa
+        qaoa_selene.SPSA_MAXITER = original_selene_spsa
+        qaoa_selene.MAX_PARALLEL_PACKAGES = original_selene_parallel
 
     runtime_sec = time.perf_counter() - workflow_start
     best_profit = float(np.sum(c_matrix * x_matrix))
@@ -470,7 +578,7 @@ def _run_qaoa(
 
     notes_parts = [
         f"execution_target={execution_target}",
-        f"optimizer={optimizer}",
+        f"optimizer={effective_optimizer}",
         "num_samples_feasible counts per-evaluation package-local samples against original coverage constraints",
         "two_qubit_gate_count is derived from generated QAOA zz_phase terms",
         "compiled circuit depth is unavailable from the current guppylang/hugr package API",
@@ -483,11 +591,21 @@ def _run_qaoa(
     if relaxed_notes:
         notes_parts.append("constraint priority relaxation enabled to fit MAX_QUBITS")
         notes_parts.extend(relaxed_notes)
+    if compact_qubo:
+        notes_parts.append(
+            "compact_qubo: optional/incompat/dependency penalties without slack (capacity still uses slack); "
+            "see qaoa.build_qubo_block_for_package(compact_penalties=True)"
+        )
+    if fast_selene:
+        notes_parts.append(
+            "fast_selene: batched theta search (one Nexus execute per package) + parallel packages; "
+            "not SPSA/COBYLA — for wall-clock smoke tests only"
+        )
 
     summary_row = {
         "run_id": run_id,
         "algorithm": "qaoa",
-        "optimizer": optimizer,
+        "optimizer": effective_optimizer,
         "seed": int(seed),
         "N_local": int(problem.N),
         "M_blocks": int(problem.M),
@@ -532,6 +650,77 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--target", default=QAOA_EXECUTION_TARGET, choices=["local", "selene"])
     parser.add_argument("--optimizer", default=QAOA_OPTIMIZER, choices=["cobyla", "spsa"])
     parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument(
+        "--compact-qubo",
+        action="store_true",
+        help=(
+            "Fewer slack qubits (pairwise/quad penalties for optional/incompat/dependency); "
+            "fits Selene for N=20. See HEURISTICS/COMPACT_QUBO.md."
+        ),
+    )
+    parser.add_argument(
+        "--shots",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Override qaoa.SHOTS for this run only (default: module default). "
+            "Lower values reduce Selene time at the cost of noisier objectives."
+        ),
+    )
+    parser.add_argument(
+        "--cobyla-maxiter",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Override COBYLA maxiter for this run only (default: qaoa.COBYLA_MAXITER).",
+    )
+    parser.add_argument(
+        "--spsa-maxiter",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Override SPSA outer steps for this run only (default: qaoa.SPSA_MAXITER). "
+            "Each step uses two circuit evaluations (theta+ and theta-)."
+        ),
+    )
+    parser.add_argument(
+        "--fast-selene",
+        action="store_true",
+        help=(
+            "Selene only: run many random (or grid) QAOA angles in a single execute() per package, "
+            "and solve packages in parallel. Ignores SPSA/COBYLA for execution; use for short wall-clock "
+            "smoke tests on large N×M (see HEURISTICS/COMPACT_QUBO.md). For N×M below "
+            f"{SELENE_FAST_SELENE_MIN_NM}, this flag is ignored unless --force-fast-selene. Requires --target selene."
+        ),
+    )
+    parser.add_argument(
+        "--force-fast-selene",
+        action="store_true",
+        help=(
+            "Apply --fast-selene even when N×M is small (normally regular SPSA/COBYLA on Selene is used)."
+        ),
+    )
+    parser.add_argument(
+        "--fast-selene-trials",
+        type=int,
+        default=8,
+        metavar="N",
+        help=(
+            "With --fast-selene --fast-selene-strategy random: number of random (gamma, beta) samples "
+            "per package (default: 8). Ignored for grid strategy."
+        ),
+    )
+    parser.add_argument(
+        "--fast-selene-strategy",
+        choices=["random", "grid"],
+        default="random",
+        help=(
+            "With --fast-selene: random uniform angles (needs --fast-selene-trials) or a fixed 3x3 "
+            "gamma/beta grid (requires --p 1)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -541,6 +730,23 @@ def main(argv: Sequence[str] | None = None) -> dict[str, Any]:
 
     if args.algorithm == "dqi":
         raise NotImplementedError("DQI logging is not implemented yet.")
+    if args.fast_selene and args.target != "selene":
+        raise SystemExit("error: --fast-selene requires --target selene")
+    if args.fast_selene and args.fast_selene_strategy == "grid" and args.p != 1:
+        raise SystemExit("error: --fast-selene-strategy grid requires --p 1")
+    if (
+        args.algorithm == "qaoa"
+        and args.target == "selene"
+        and args.fast_selene
+        and not args.force_fast_selene
+        and int(args.n) * int(args.m) < int(SELENE_FAST_SELENE_MIN_NM)
+    ):
+        print(
+            f"Note: --fast-selene disabled for N×M={args.n}×{args.m} < {SELENE_FAST_SELENE_MIN_NM} "
+            "(using regular --optimizer on Selene). Use --force-fast-selene to override.",
+            flush=True,
+        )
+        args.fast_selene = False
     if args.algorithm == "classical":
         return _run_classical(
             n=args.n,
@@ -561,6 +767,13 @@ def main(argv: Sequence[str] | None = None) -> dict[str, Any]:
         histories_dir=HISTORIES_DIR,
         solutions_dir=SOLUTIONS_DIR,
         generate_training_loss_plot=GENERATE_TRAINING_LOSS_PLOT,
+        compact_qubo=args.compact_qubo,
+        shots=args.shots,
+        cobyla_maxiter=args.cobyla_maxiter,
+        spsa_maxiter=args.spsa_maxiter,
+        fast_selene=bool(args.fast_selene),
+        fast_selene_trials=args.fast_selene_trials,
+        fast_selene_strategy=args.fast_selene_strategy,
     )
 
 
