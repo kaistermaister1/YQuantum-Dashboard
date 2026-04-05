@@ -35,10 +35,10 @@ P_DEPTH = 1
 OPTIMIZER = "cobyla"  # "cobyla" or "spsa"
 SHOTS = 256
 SEED = 0
-MAX_QUBITS = 24
+MAX_QUBITS = 64
 COBYLA_MAXITER = 40
 SPSA_MAXITER = 40
-PENALTY_SCALE = 3.0
+PENALTY_SCALE = 4.0
 EXECUTION_TARGET = "local"  # "local" or "selene"
 NEXUS_PROJECT = "YQuantum QAOA"
 SELENE_SIMULATOR = "statevector"
@@ -139,10 +139,56 @@ class QuboBlock:
     n_slack: int
     penalty_weight: float
     constant_offset: float = 0.0
+    max_qubits: int | None = None
+    slack_budget: int | None = None
+    optional_family_constraints_encoded: int = 0
+    optional_family_constraints_dropped: int = 0
+    capacity_constraint_encoded: bool = True
+    incompatibility_constraints_encoded: int = 0
+    incompatibility_constraints_dropped: int = 0
+    dependency_constraints_encoded: int = 0
+    dependency_constraints_dropped: int = 0
 
     @property
     def n_vars(self) -> int:
         return int(self.Q.shape[0])
+
+    @property
+    def is_relaxed(self) -> bool:
+        return any(
+            (
+                self.optional_family_constraints_dropped,
+                int(not self.capacity_constraint_encoded),
+                self.incompatibility_constraints_dropped,
+                self.dependency_constraints_dropped,
+            )
+        )
+
+    def constraint_budget_summary(self) -> str:
+        if self.slack_budget is None:
+            return "uncapped slack budget"
+        if not self.is_relaxed:
+            return (
+                f"slack budget {self.slack_budget}, kept all prioritized constraints "
+                f"({self.n_slack} slack used)"
+            )
+        parts = [
+            f"slack budget {self.slack_budget}",
+            (
+                f"optional families kept {self.optional_family_constraints_encoded}/"
+                f"{self.optional_family_constraints_encoded + self.optional_family_constraints_dropped}"
+            ),
+            f"capacity {'kept' if self.capacity_constraint_encoded else 'dropped'}",
+            (
+                f"dependencies kept {self.dependency_constraints_encoded}/"
+                f"{self.dependency_constraints_encoded + self.dependency_constraints_dropped}"
+            ),
+            (
+                f"incompatibilities kept {self.incompatibility_constraints_encoded}/"
+                f"{self.incompatibility_constraints_encoded + self.incompatibility_constraints_dropped}"
+            ),
+        ]
+        return ", ".join(parts)
 
     def energy(self, x: np.ndarray) -> float:
         bits = np.asarray(x, dtype=float).ravel()
@@ -493,6 +539,11 @@ def build_qubo_block_for_package(problem: BundlingProblem, package_index: int) -
     lam = default_penalty_weight(problem, package_index)
     N = problem.N
     K = problem.max_options_per_package
+    slack_budget = MAX_QUBITS - N
+    if slack_budget < 0:
+        raise ValueError(
+            f"Block needs {N} coverage qubits before slack variables, which exceeds MAX_QUBITS={MAX_QUBITS}"
+        )
     slack_count = 0
 
     def alloc_slack(n_bits: int) -> list[int]:
@@ -502,16 +553,44 @@ def build_qubo_block_for_package(problem: BundlingProblem, package_index: int) -
         slack_count += n_bits
         return indices
 
+    def can_allocate(n_bits: int) -> bool:
+        return slack_count + n_bits <= slack_budget
+
+    encoded_optional_families: list[list[int]] = []
+    dropped_optional_family_count = 0
     for indices in problem.optional_families.values():
-        if len(indices) > 1:
+        if len(indices) <= 1:
+            continue
+        if can_allocate(1):
             alloc_slack(1)
+            encoded_optional_families.append(indices)
+        else:
+            dropped_optional_family_count += 1
+
     cap_slacks = max(1, int(math.ceil(math.log2(K + 1))))
-    alloc_slack(cap_slacks)
-    for rule in problem.compatibility_rules:
-        if not rule.compatible:
+    capacity_constraint_encoded = can_allocate(cap_slacks)
+    if capacity_constraint_encoded:
+        alloc_slack(cap_slacks)
+
+    encoded_dependency_rules: list[DependencyRule] = []
+    dropped_dependency_count = 0
+    for rule in problem.dependency_rules:
+        if can_allocate(1):
             alloc_slack(1)
-    for _ in problem.dependency_rules:
-        alloc_slack(1)
+            encoded_dependency_rules.append(rule)
+        else:
+            dropped_dependency_count += 1
+
+    encoded_incompatibility_rules: list[CompatibilityRule] = []
+    dropped_incompatibility_count = 0
+    for rule in problem.compatibility_rules:
+        if rule.compatible:
+            continue
+        if can_allocate(1):
+            alloc_slack(1)
+            encoded_incompatibility_rules.append(rule)
+        else:
+            dropped_incompatibility_count += 1
 
     n_slack = slack_count
     Q = np.zeros((N + n_slack, N + n_slack), dtype=float)
@@ -531,28 +610,25 @@ def build_qubo_block_for_package(problem: BundlingProblem, package_index: int) -
 
     for indices in problem.mandatory_families.values():
         constant_offset += _add_squared_linear_penalty(Q, {i: 1.0 for i in indices}, 1.0, lam)
-    for indices in problem.optional_families.values():
-        if len(indices) <= 1:
-            continue
+    for indices in encoded_optional_families:
         s = next_slack(1)[0]
         coeffs = {i: 1.0 for i in indices}
         coeffs[s] = 1.0
         constant_offset += _add_squared_linear_penalty(Q, coeffs, 1.0, lam)
 
-    cap_coeffs: dict[int, float] = {i: 1.0 for i in range(N)}
-    for bit, s in enumerate(next_slack(cap_slacks)):
-        cap_coeffs[s] = float(2**bit)
-    constant_offset += _add_squared_linear_penalty(Q, cap_coeffs, float(K), lam)
+    if capacity_constraint_encoded:
+        cap_coeffs: dict[int, float] = {i: 1.0 for i in range(N)}
+        for bit, s in enumerate(next_slack(cap_slacks)):
+            cap_coeffs[s] = float(2**bit)
+        constant_offset += _add_squared_linear_penalty(Q, cap_coeffs, float(K), lam)
 
-    for rule in problem.compatibility_rules:
-        if rule.compatible:
-            continue
+    for rule in encoded_incompatibility_rules:
         i = problem.coverage_index(rule.coverage_i)
         j = problem.coverage_index(rule.coverage_j)
         s = next_slack(1)[0]
         constant_offset += _add_squared_linear_penalty(Q, {i: 1.0, j: 1.0, s: 1.0}, 1.0, lam)
 
-    for rule in problem.dependency_rules:
+    for rule in encoded_dependency_rules:
         i = problem.coverage_index(rule.requires)
         j = problem.coverage_index(rule.dependent)
         s = next_slack(1)[0]
@@ -565,6 +641,15 @@ def build_qubo_block_for_package(problem: BundlingProblem, package_index: int) -
         n_slack=n_slack,
         penalty_weight=lam,
         constant_offset=constant_offset,
+        max_qubits=MAX_QUBITS,
+        slack_budget=slack_budget,
+        optional_family_constraints_encoded=len(encoded_optional_families),
+        optional_family_constraints_dropped=dropped_optional_family_count,
+        capacity_constraint_encoded=capacity_constraint_encoded,
+        incompatibility_constraints_encoded=len(encoded_incompatibility_rules),
+        incompatibility_constraints_dropped=dropped_incompatibility_count,
+        dependency_constraints_encoded=len(encoded_dependency_rules),
+        dependency_constraints_dropped=dropped_dependency_count,
     )
 
 
@@ -932,10 +1017,13 @@ def solve_qaoa_matrix(
 
     for package_index, block in enumerate(blocks):
         block_start = time.perf_counter()
-        _log(
+        block_summary = (
             f"[workflow] Package {package_index + 1}/{len(blocks)} block summary: "
             f"{block.n_vars} qubits = {block.n_coverage} coverage + {block.n_slack} slack"
         )
+        if block.is_relaxed:
+            block_summary += f" ({block.constraint_budget_summary()})"
+        _log(block_summary)
         result = optimize_block(
             block,
             p=p,

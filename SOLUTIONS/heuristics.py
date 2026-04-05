@@ -15,22 +15,25 @@ import numpy as np
 import classical_baseline
 import qaoa
 import qaoa_selene
+from qaoa_plots import save_training_loss_plot
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_ROOT = Path(__file__).resolve().parent / "HEURISTICS"
 SUMMARIES_DIR = OUTPUT_ROOT / "summaries"
 HISTORIES_DIR = OUTPUT_ROOT / "histories"
 SOLUTIONS_DIR = OUTPUT_ROOT / "solutions"
+PLOTS_DIR = OUTPUT_ROOT / "plots"
 RUN_SUMMARY_INDEX_PATH = OUTPUT_ROOT / "run_summaries.csv"
 
 # Top-level run config
 ALGORITHM = "classical"  # "classical", "qaoa", or "dqi" when implemented
-N_COVERAGES = 5
-M_PACKAGES = 3
-P_DEPTH = 2
+N_COVERAGES = 4
+M_PACKAGES = 2
+P_DEPTH = 1
 QAOA_EXECUTION_TARGET = "local"  # "local" or "selene"
 QAOA_OPTIMIZER = "cobyla"  # "cobyla" or "spsa"
 SEED = 0
+GENERATE_TRAINING_LOSS_PLOT = False
 
 SUMMARY_FIELDS = [
     "run_id",
@@ -86,7 +89,7 @@ CLASSICAL_HISTORY_FIELDS = [
 
 
 def _ensure_output_dirs() -> None:
-    for directory in (OUTPUT_ROOT, SUMMARIES_DIR, HISTORIES_DIR, SOLUTIONS_DIR):
+    for directory in (OUTPUT_ROOT, SUMMARIES_DIR, HISTORIES_DIR, SOLUTIONS_DIR, PLOTS_DIR):
         directory.mkdir(parents=True, exist_ok=True)
 
 
@@ -180,6 +183,15 @@ def _build_lambda_token(lambda_values: Sequence[float]) -> str | None:
     if len(compact_values) == 1:
         return f"lam{compact_values[0]}"
     return f"lamx{len(compact_values)}_" + "-".join(compact_values)
+
+
+def _relaxed_block_notes(blocks: Sequence[qaoa.QuboBlock]) -> list[str]:
+    notes: list[str] = []
+    for block in blocks:
+        if not block.is_relaxed:
+            continue
+        notes.append(f"package {block.package_index + 1}: {block.constraint_budget_summary()}")
+    return notes
 
 
 def _build_feasibility_checker(problem: qaoa.BundlingProblem) -> Callable[[Sequence[int]], bool]:
@@ -313,6 +325,7 @@ def _run_qaoa(
     summaries_dir: Path,
     histories_dir: Path,
     solutions_dir: Path,
+    generate_training_loss_plot: bool,
 ) -> dict[str, Any]:
     if optimizer not in {"cobyla", "spsa"}:
         raise ValueError("optimizer must be 'cobyla' or 'spsa'")
@@ -340,6 +353,7 @@ def _run_qaoa(
     num_samples_feasible = 0
     num_objective_evals = 0
     history_rows: list[dict[str, Any]] = []
+    plot_series: list[tuple[str, list[float], list[float]]] = []
 
     session = None
     original_qaoa_optimizer = qaoa.OPTIMIZER
@@ -414,6 +428,13 @@ def _run_qaoa(
 
             coverage_bits = np.array([int(char) for char in result.stats.best_bitstring[: problem.N]], dtype=int)
             x_matrix[:, package_index] = coverage_bits
+            plot_series.append(
+                (
+                    package_name,
+                    result.trace.objective_values,
+                    result.trace.best_objective_values,
+                )
+            )
     finally:
         qaoa.OPTIMIZER = original_qaoa_optimizer
         qaoa_selene.OPTIMIZER = original_selene_optimizer
@@ -439,6 +460,13 @@ def _run_qaoa(
         QAOA_HISTORY_FIELDS,
         history_rows,
     )
+    plot_path: Path | None = None
+    if generate_training_loss_plot and plot_series:
+        plot_path = save_training_loss_plot(
+            plot_series,
+            PLOTS_DIR / f"{stem}_training_loss.png",
+            title="QAOA Training Loss",
+        )
 
     notes_parts = [
         f"execution_target={execution_target}",
@@ -447,8 +475,14 @@ def _run_qaoa(
         "two_qubit_gate_count is derived from generated QAOA zz_phase terms",
         "compiled circuit depth is unavailable from the current guppylang/hugr package API",
     ]
+    if plot_path is not None:
+        notes_parts.append(f"training_loss_plot={_path_to_repo_relative_string(plot_path)}")
     if len(blocks) > 1:
         notes_parts.append("lambda stores one penalty value per package-local block")
+    relaxed_notes = _relaxed_block_notes(blocks)
+    if relaxed_notes:
+        notes_parts.append("constraint priority relaxation enabled to fit MAX_QUBITS")
+        notes_parts.extend(relaxed_notes)
 
     summary_row = {
         "run_id": run_id,
@@ -484,6 +518,8 @@ def _run_qaoa(
     print(f"Saved summary to {_path_to_repo_relative_string(summary_path)}")
     print(f"Saved solution to {_path_to_repo_relative_string(solution_path)}")
     print(f"Saved history to {_path_to_repo_relative_string(history_path)}")
+    if plot_path is not None:
+        print(f"Saved plot to {_path_to_repo_relative_string(plot_path)}")
     return summary_row
 
 
@@ -524,6 +560,7 @@ def main(argv: Sequence[str] | None = None) -> dict[str, Any]:
         summaries_dir=SUMMARIES_DIR,
         histories_dir=HISTORIES_DIR,
         solutions_dir=SOLUTIONS_DIR,
+        generate_training_loss_plot=GENERATE_TRAINING_LOSS_PLOT,
     )
 
 

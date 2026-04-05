@@ -1,0 +1,19 @@
+# Lists which families (by fam_abbrev) each package type may draw from.
+package_templates:
+  InteriorPackage:
+    families:
+      - FAM_STWHL    # Steering Wheel
+      - FAM_STYPE    # Seat Type
+      #- FAM_SFEAT    # Seat Features
+      #- FAM_UPHOL    # Upholstery Material
+      #- FAM_LBA      # Lighting & Ambience (e.g. scuff plates, ambient LEDs)
+      #- FAM_INF      # Infotainment & Connectivity (e.g. displays, charging)
+
+  #TechPackage:
+  #  families:
+  #    - FAM_INF      # Infotainment & Connectivity
+  #    - FAM_ADAS     # Driver Assistance & Safety
+
+  #DriverAssistPackage:
+  #  families:
+  #    - FAM_ADAS     # Driver Assistance & Safety
