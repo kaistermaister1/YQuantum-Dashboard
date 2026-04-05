@@ -399,9 +399,17 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
 
         {activeView === "home" ? (
           <section className="home-overview card-surface" style={{ padding: '3rem', margin: '2rem auto', lineHeight: '1.7', fontSize: '1.1rem' }}>
-            <h2 style={{ fontSize: '2rem', marginBottom: '0.5rem', color: 'var(--yale-blue)' }}>BYU QGars - YQuantum 2026</h2>
-            <p style={{ fontSize: '1.2rem', color: 'var(--text-muted)', marginBottom: '2rem' }}><strong>Travelers &times; Quantinuum &times; LTM</strong></p>
-            
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem' }}>
+              <div>
+                <h2 style={{ fontSize: '2rem', marginBottom: '0.5rem', color: 'var(--yale-blue)' }}>BYU QGars - YQuantum 2026</h2>
+                <p style={{ fontSize: '1.2rem', color: 'var(--text-muted)', margin: 0 }}><strong>Travelers &times; Quantinuum &times; LTM</strong></p>
+              </div>
+              <a href="/YQUANTUM_2026.pdf" target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', textDecoration: 'none', color: 'var(--travelers-red)', fontWeight: 600, fontSize: '1.1rem', transition: 'opacity 0.2s' }} onMouseOver={(e) => e.currentTarget.style.opacity = '0.8'} onMouseOut={(e) => e.currentTarget.style.opacity = '1'}>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                Read Full Report
+              </a>
+            </div>
+
             <p>We had an amazing time learning to apply two quantum algorithms to real insurance problems. This is our collective gained knowledge over the last 24 hours.</p>
 
             <h3 style={{ fontSize: '1.5rem', marginTop: '2.5rem', marginBottom: '1rem', color: 'var(--travelers-red)' }}>Integer Linear Programming in Insurance</h3>
