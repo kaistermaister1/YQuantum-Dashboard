@@ -1,0 +1,4 @@
+method,objective,n_evaluations,seconds,p,mixer
+grid,-241.675020288003,4,121.375889,1,h
+random,-140.26856376000069,8,238.968771,1,h
+hillclimb,-243.58928255999854,4,121.314414,2,rx

@@ -47,6 +47,13 @@ def _run_hybrid(
     p: int,
     shots: int,
     seed: int,
+    execution: str,
+    max_qubits: int,
+    nexus_hugr_name: str,
+    nexus_job_name: str,
+    nexus_helios_system: str,
+    nexus_timeout: float | None,
+    nexus_max_cost: float | None,
     mixer: str = "h",
     statistic: str = "mean",
     gammas: list[float] | None = None,
@@ -59,8 +66,13 @@ def _run_hybrid(
         seed=int(seed),
         mixer=str(mixer),
         statistic=str(statistic),
-        execution="local",
-        max_qubits=max(64, int(block.n_vars)),
+        execution=str(execution),
+        max_qubits=max(int(max_qubits), int(block.n_vars)),
+        nexus_hugr_name=str(nexus_hugr_name),
+        nexus_job_name=str(nexus_job_name),
+        nexus_helios_system=str(nexus_helios_system),
+        nexus_timeout=nexus_timeout,
+        nexus_max_cost=nexus_max_cost,
         gammas=gammas,
         betas=betas,
     )
@@ -74,6 +86,13 @@ def _convergence(
     shots: int,
     seed: int,
     n_eval: int,
+    execution: str,
+    max_qubits: int,
+    nexus_hugr_name: str,
+    nexus_job_name: str,
+    nexus_helios_system: str,
+    nexus_timeout: float | None,
+    nexus_max_cost: float | None,
 ) -> list[float]:
     hist: list[float] = []
     for i in range(int(n_eval)):
@@ -82,6 +101,13 @@ def _convergence(
             p=int(p),
             shots=int(shots),
             seed=int(seed) + i,
+            execution=str(execution),
+            max_qubits=int(max_qubits),
+            nexus_hugr_name=f"{nexus_hugr_name}-conv{i}",
+            nexus_job_name=f"{nexus_job_name}-conv{i}",
+            nexus_helios_system=str(nexus_helios_system),
+            nexus_timeout=nexus_timeout,
+            nexus_max_cost=nexus_max_cost,
             mixer="h",
             statistic="mean",
         )
@@ -129,6 +155,13 @@ def _landscape_plot(
     n_beta: int,
     out_png: Path,
     out_json: Path,
+    execution: str,
+    max_qubits: int,
+    nexus_hugr_name: str,
+    nexus_job_name: str,
+    nexus_helios_system: str,
+    nexus_timeout: float | None,
+    nexus_max_cost: float | None,
 ) -> None:
     gammas = np.linspace(0.0, np.pi, int(n_gamma), dtype=float)
     betas = np.linspace(0.0, np.pi, int(n_beta), dtype=float)
@@ -143,6 +176,13 @@ def _landscape_plot(
                 p=1,
                 shots=int(shots),
                 seed=int(seed) + k,
+                execution=str(execution),
+                max_qubits=int(max_qubits),
+                nexus_hugr_name=f"{nexus_hugr_name}-land{k}",
+                nexus_job_name=f"{nexus_job_name}-land{k}",
+                nexus_helios_system=str(nexus_helios_system),
+                nexus_timeout=nexus_timeout,
+                nexus_max_cost=nexus_max_cost,
                 mixer="h",
                 statistic="mean",
                 gammas=[float(g)],
@@ -196,11 +236,39 @@ class OptRow:
     mixer: str
 
 
-def _optimizer_benchmark(block, *, shots: int, seed: int, out_png: Path, out_csv: Path) -> None:
+def _optimizer_benchmark(
+    block,
+    *,
+    shots: int,
+    seed: int,
+    out_png: Path,
+    out_csv: Path,
+    execution: str,
+    max_qubits: int,
+    nexus_hugr_name: str,
+    nexus_job_name: str,
+    nexus_helios_system: str,
+    nexus_timeout: float | None,
+    nexus_max_cost: float | None,
+) -> None:
     search_space = [(1, "h"), (1, "rx"), (2, "h"), (2, "rx")]
 
     def eval_cfg(p: int, mixer: str, k: int) -> float:
-        _, val, _ = _run_hybrid(block, p=p, shots=shots, seed=seed + k, mixer=mixer, statistic="mean")
+        _, val, _ = _run_hybrid(
+            block,
+            p=p,
+            shots=shots,
+            seed=seed + k,
+            execution=str(execution),
+            max_qubits=int(max_qubits),
+            nexus_hugr_name=f"{nexus_hugr_name}-opt{k}",
+            nexus_job_name=f"{nexus_job_name}-opt{k}",
+            nexus_helios_system=str(nexus_helios_system),
+            nexus_timeout=nexus_timeout,
+            nexus_max_cost=nexus_max_cost,
+            mixer=mixer,
+            statistic="mean",
+        )
         return float(val)
 
     rows: list[OptRow] = []
@@ -304,6 +372,13 @@ def _scaling_rows(
     p: int,
     shots: int,
     seed: int,
+    execution: str,
+    max_qubits: int,
+    nexus_hugr_name: str,
+    nexus_job_name: str,
+    nexus_helios_system: str,
+    nexus_timeout: float | None,
+    nexus_max_cost: float | None,
 ) -> list[dict]:
     rows: list[dict] = []
     for n in ns:
@@ -320,8 +395,13 @@ def _scaling_rows(
             include_local_search_baseline=True,
             mixer="h",
             statistic="mean",
-            execution="local",
-            max_qubits=max(64, int(block.n_vars)),
+            execution=str(execution),
+            max_qubits=max(int(max_qubits), int(block.n_vars)),
+            nexus_hugr_name=f"{nexus_hugr_name}-scale{n}",
+            nexus_job_name=f"{nexus_job_name}-scale{n}",
+            nexus_helios_system=str(nexus_helios_system),
+            nexus_timeout=nexus_timeout,
+            nexus_max_cost=nexus_max_cost,
         )
         ref = float(bench["bruteforce"].best_value) if "bruteforce" in bench else None
 
@@ -359,6 +439,19 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--test-ns", type=int, nargs="*", default=[10, 20], help="Rows for test-style comparison")
     ap.add_argument("--landscape-n-gamma", type=int, default=4)
     ap.add_argument("--landscape-n-beta", type=int, default=4)
+    ap.add_argument(
+        "--execution",
+        choices=["local", "selene", "nexus-selene", "nexus-helios"],
+        default="nexus-selene",
+        help="Hybrid execution backend (default nexus-selene).",
+    )
+    ap.add_argument("--max-qubits", type=int, default=256)
+    ap.add_argument("--nexus-hugr-name", default="hybrid-graph-hugr")
+    ap.add_argument("--nexus-job-name", default="hybrid-graph-job")
+    ap.add_argument("--nexus-helios-system", default="Helios-1")
+    ap.add_argument("--nexus-no-timeout", action="store_true")
+    ap.add_argument("--nexus-timeout", type=float, default=900.0)
+    ap.add_argument("--nexus-max-cost", type=float, default=None)
     ap.add_argument("--out-root", type=Path, default=ROOT / "artifacts")
     return ap.parse_args()
 
@@ -382,6 +475,8 @@ def main() -> int:
     out_root.mkdir(parents=True, exist_ok=True)
     out_bench.mkdir(parents=True, exist_ok=True)
     out_hybrid.mkdir(parents=True, exist_ok=True)
+    exec_key = str(args.execution).replace("-", "_")
+    nexus_timeout = None if bool(args.nexus_no_timeout) else float(args.nexus_timeout)
 
     # convergence counterpart
     conv_hist = _convergence(
@@ -390,13 +485,34 @@ def main() -> int:
         shots=int(args.shots),
         seed=int(args.seed),
         n_eval=int(args.convergence_evals),
+        execution=exec_key,
+        max_qubits=int(args.max_qubits),
+        nexus_hugr_name=str(args.nexus_hugr_name),
+        nexus_job_name=str(args.nexus_job_name),
+        nexus_helios_system=str(args.nexus_helios_system),
+        nexus_timeout=nexus_timeout,
+        nexus_max_cost=args.nexus_max_cost,
     )
     conv_path = out_root / "hybrid_dqi_convergence_10var.png"
     plot_convergence(conv_hist, out_path=conv_path, title="Hybrid DQI convergence (10 vars)")
     print("wrote:", conv_path)
 
     # histogram counterpart
-    _, _, meta_hist = _run_hybrid(block10, p=2, shots=int(args.shots), seed=int(args.seed) + 500, mixer="h", statistic="mean")
+    _, _, meta_hist = _run_hybrid(
+        block10,
+        p=2,
+        shots=int(args.shots),
+        seed=int(args.seed) + 500,
+        execution=exec_key,
+        max_qubits=int(args.max_qubits),
+        nexus_hugr_name=str(args.nexus_hugr_name),
+        nexus_job_name=str(args.nexus_job_name),
+        nexus_helios_system=str(args.nexus_helios_system),
+        nexus_timeout=nexus_timeout,
+        nexus_max_cost=args.nexus_max_cost,
+        mixer="h",
+        statistic="mean",
+    )
     hist_path = out_hybrid / "hybrid_dqi_histogram_energy.png"
     _histogram_plot(block10, meta_hist, hist_path)
     print("wrote:", hist_path)
@@ -412,6 +528,13 @@ def main() -> int:
         n_beta=int(args.landscape_n_beta),
         out_png=land_png,
         out_json=land_json,
+        execution=exec_key,
+        max_qubits=int(args.max_qubits),
+        nexus_hugr_name=str(args.nexus_hugr_name),
+        nexus_job_name=str(args.nexus_job_name),
+        nexus_helios_system=str(args.nexus_helios_system),
+        nexus_timeout=nexus_timeout,
+        nexus_max_cost=args.nexus_max_cost,
     )
     print("wrote:", land_png)
     print("wrote:", land_json)
@@ -419,7 +542,20 @@ def main() -> int:
     # optimizer benchmark counterpart
     opt_png = out_hybrid / "hybrid_dqi_optimizer_benchmark.png"
     opt_csv = out_hybrid / "hybrid_dqi_optimizer_benchmark.csv"
-    _optimizer_benchmark(block10, shots=int(args.shots), seed=int(args.seed) + 900, out_png=opt_png, out_csv=opt_csv)
+    _optimizer_benchmark(
+        block10,
+        shots=int(args.shots),
+        seed=int(args.seed) + 900,
+        out_png=opt_png,
+        out_csv=opt_csv,
+        execution=exec_key,
+        max_qubits=int(args.max_qubits),
+        nexus_hugr_name=str(args.nexus_hugr_name),
+        nexus_job_name=str(args.nexus_job_name),
+        nexus_helios_system=str(args.nexus_helios_system),
+        nexus_timeout=nexus_timeout,
+        nexus_max_cost=args.nexus_max_cost,
+    )
     print("wrote:", opt_png)
     print("wrote:", opt_csv)
 
@@ -432,6 +568,13 @@ def main() -> int:
         p=2,
         shots=int(args.shots),
         seed=int(args.seed) + 1000,
+        execution=exec_key,
+        max_qubits=int(args.max_qubits),
+        nexus_hugr_name=str(args.nexus_hugr_name),
+        nexus_job_name=str(args.nexus_job_name),
+        nexus_helios_system=str(args.nexus_helios_system),
+        nexus_timeout=nexus_timeout,
+        nexus_max_cost=args.nexus_max_cost,
     )
     official_plot = out_bench / "hybrid_dqi_official_sizes_comparison.png"
     plot_scaling_benchmark(
@@ -450,6 +593,13 @@ def main() -> int:
         p=1,
         shots=int(args.shots),
         seed=int(args.seed) + 2000,
+        execution=exec_key,
+        max_qubits=int(args.max_qubits),
+        nexus_hugr_name=str(args.nexus_hugr_name),
+        nexus_job_name=str(args.nexus_job_name),
+        nexus_helios_system=str(args.nexus_helios_system),
+        nexus_timeout=nexus_timeout,
+        nexus_max_cost=args.nexus_max_cost,
     )
     test_plot = out_bench / "hybrid_test_plot.png"
     plot_scaling_benchmark(
