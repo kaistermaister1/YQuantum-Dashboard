@@ -398,111 +398,91 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
         </header>
 
         {activeView === "home" ? (
-          <section className="boards-wrap">
-            <div className="boards-grid">
-              {DECKS.map((deck) => {
-                const deckCards = deckMap[deck.key];
+          <section className="home-overview card-surface" style={{ padding: '3rem', margin: '2rem auto', lineHeight: '1.7', fontSize: '1.1rem' }}>
+            <h2 style={{ fontSize: '2rem', marginBottom: '0.5rem', color: 'var(--yale-blue)' }}>BYU QGars - YQuantum 2026</h2>
+            <p style={{ fontSize: '1.2rem', color: 'var(--text-muted)', marginBottom: '2rem' }}><strong>Travelers &times; Quantinuum &times; LTM</strong></p>
+            
+            <p>We had an amazing time learning to apply two quantum algorithms to real insurance problems. This is our collective gained knowledge over the last 24 hours.</p>
 
-                return (
-                  <section className="deck" data-color={deck.key} key={deck.key}>
-                    <header className="deck-head">
-                      <div>
-                        <h2 className="deck-title">{deck.label}</h2>
-                        <p className="deck-subtitle">
-                          <DeckGlyph deck={deck.key} />
-                          <span>{DECK_SUBTEXT[deck.key]}</span>
-                        </p>
-                      </div>
-                      <div className="count-badge">{deckCards.length}</div>
-                    </header>
-
-                    <div className="cards">
-                      <div
-                        className="drop-zone"
-                        data-active={activeDrop === `${deck.key}:0`}
-                        onDragOver={(event) => {
-                          event.preventDefault();
-                          setActiveDrop(`${deck.key}:0`);
-                        }}
-                        onDragLeave={() => setActiveDrop((current) => (current === `${deck.key}:0` ? null : current))}
-                        onDrop={(event) => {
-                          event.preventDefault();
-                          if (dragState) {
-                            void moveCard(dragState.cardId, deck.key, 0);
-                          }
-                          setDragState(null);
-                          setActiveDrop(null);
-                        }}
-                      />
-
-                      {deckCards.map((card, index) => (
-                        <div key={card.id}>
-                          <article
-                            className="card"
-                            data-dragging={dragState?.cardId === card.id}
-                            draggable
-                            onClick={() =>
-                              setCardModal({
-                                mode: "edit",
-                                deck: card.deck,
-                                id: card.id,
-                                title: card.title
-                              })
-                            }
-                            onDragStart={() => {
-                              setDragState({ cardId: card.id, deck: card.deck });
-                            }}
-                            onDragEnd={() => {
-                              setDragState(null);
-                              setActiveDrop(null);
-                            }}
-                          >
-                            <h3 className="card-title">{card.title}</h3>
-                          </article>
-
-                          <div
-                            className="drop-zone"
-                            data-active={activeDrop === `${deck.key}:${index + 1}`}
-                            onDragOver={(event) => {
-                              event.preventDefault();
-                              setActiveDrop(`${deck.key}:${index + 1}`);
-                            }}
-                            onDragLeave={() =>
-                              setActiveDrop((current) => (current === `${deck.key}:${index + 1}` ? null : current))
-                            }
-                            onDrop={(event) => {
-                              event.preventDefault();
-                              if (dragState) {
-                                void moveCard(dragState.cardId, deck.key, index + 1);
-                              }
-                              setDragState(null);
-                              setActiveDrop(null);
-                            }}
-                          />
-                        </div>
-                      ))}
-                    </div>
-
-                    <button
-                      className="add-button"
-                      type="button"
-                      onClick={() =>
-                        setCardModal({
-                          mode: "create",
-                          deck: deck.key,
-                          title: ""
-                        })
-                      }
-                    >
-                      <span className="add-button-icon" aria-hidden="true">
-                        +
-                      </span>
-                      <span>Add card</span>
-                    </button>
-                  </section>
-                );
-              })}
+            <h3 style={{ fontSize: '1.5rem', marginTop: '2.5rem', marginBottom: '1rem', color: 'var(--travelers-red)' }}>Integer Linear Programming in Insurance</h3>
+            
+            <p><strong>Marbles.</strong> Imagine many marbles of different colors. You are arranging them into gift bags; each recipient needs a blue or red marble, and optionally some other colors as well.</p>
+            
+            <p>This analogy helped us understand, to some degree, the confusing world of insurance. From the company's perspective, they have several coverages (marbles) of several families (colors) to distribute into discounted packages. Abiding by some rules of mixing coverages into bundles, the company aims to maximize profit by choosing which packages to offer to their audience. This can be formulated mathematically as follows.</p>
+            
+            <p>Let <em>n</em> and <em>m</em> be indices labeling coverages and packages. Let <em>M<sub>0</sub></em> be an <em>n &times; m</em> matrix, where <em>M<sub>ij</sub> &isin; {"{0,1}"}</em> indicates whether coverage <em>i</em> is in bundle <em>j</em>. The goal is to find an <em>M<sub>0</sub></em> that maximizes profit subject to some restraints; that is, minimize</p>
+            
+            <div style={{ textAlign: 'center', margin: '1.5rem 0', fontSize: '1.3em', fontFamily: 'serif' }}>
+              -&sum;<sub>i,j</sub> (M &times; C)<sub>ij</sub>
             </div>
+            
+            <p>subject to certain conditions on <em>M<sub>ij</sub></em>, where <em>C<sub>ij</sub></em> encodes the average revenue from the <em>i</em>th coverage being in the <em>j</em>th bundle. This is a textbook ILP, or integer linear programming method. This turns out to be NP-hard, as the coefficients need to be 0 or 1. The proceeding quantum algorithms aim to solve this combinatorial problem with the high dimensionality of quantum computing.</p>
+
+            <h3 style={{ fontSize: '1.5rem', marginTop: '2.5rem', marginBottom: '1rem', color: 'var(--travelers-red)' }}>Quantum Approximate Optimization Algorithm</h3>
+            
+            <p>QAOA is a sneaky beast. We spent the first 9 hours understanding how the algorithm worked. The idea is simple enough: construct a matrix whose eigenvalues are the objective values of the feasible set and eigenvectors corresponding to the lowest one. We begin by encoding the ILP constraints into the objective function by introducing a large scalar penalty <em>&lambda;</em>. The domain of the objective for the quantum computer is all points in</p>
+            
+            <div style={{ textAlign: 'center', margin: '1.5rem 0', fontSize: '1.3em', fontFamily: 'serif' }}>
+              {"{0,1}"}<sup>&otimes; n</sup>,
+            </div>
+            
+            <p>many of which are not feasible. By using nonnegative slack variables, we can ensure that the objective function does not converge to a false minimum by adding a punishment proportional to <em>&lambda;</em> for such points.</p>
+            
+            <p>Mathematically,</p>
+            
+            <div style={{ textAlign: 'center', margin: '1.5rem 0', fontSize: '1.3em', fontFamily: 'serif' }}>
+              f(y) = -&sum; c<sub>i</sub> M<sub>i</sub> + &lambda; F(x),
+            </div>
+            
+            <p>where <em>F(x)=0</em> represents the feasible set. Expanding,</p>
+            
+            <div style={{ textAlign: 'center', margin: '1.5rem 0', fontSize: '1.3em', fontFamily: 'serif' }}>
+              f(y) = &sum;<sub>i</sub> Q<sub>ii</sub> y<sub>i</sub> + &sum;<sub>i&lt;j</sub> Q<sub>ij</sub> y<sub>i</sub> y<sub>j</sub>
+            </div>
+            
+            <p>up to a constant. This form is useful after making the substitution</p>
+            
+            <div style={{ textAlign: 'center', margin: '1.5rem 0', fontSize: '1.3em', fontFamily: 'serif' }}>
+              y<sub>i</sub> = (I - Z<sub>i</sub>) / 2.
+            </div>
+            
+            <p>Associating <em>y<sub>i</sub> y<sub>j</sub></em> with <em>ZZ</em> and <em>y<sub>i</sub></em> with <em>Z</em> gates, the coefficients <em>Q</em> of this objective function are used to construct precisely the matrix whose eigenvalues are the objective values of the feasible points. This matrix is called a cost Hamiltonian <em>H<sub>c</sub></em>, though seemingly, the term's only relation to energy is the objective to minimize.</p>
+            
+            <p>To implement <em>H<sub>c</sub></em> on a circuit, we use the unitary matrix</p>
+            
+            <div style={{ textAlign: 'center', margin: '1.5rem 0', fontSize: '1.3em', fontFamily: 'serif' }}>
+              U(&gamma;) = e<sup>i&gamma; H<sub>c</sub></sup>,
+            </div>
+            
+            <p>as <em>H<sub>c</sub></em> is not necessarily Hermitian. After applying on an equal superposition of states, the parameter <em>&gamma;</em> determines the magnitude of the phase picked up by the basis eigenstates; indeed,</p>
+            
+            <div style={{ textAlign: 'center', margin: '1.5rem 0', fontSize: '1.3em', fontFamily: 'serif' }}>
+              U(&gamma;)|E&rang; = e<sup>i&gamma; E</sup>|E&rang;.
+            </div>
+            
+            <p>Finally, this phase is converted into a magnitude after applying</p>
+            
+            <div style={{ textAlign: 'center', margin: '1.5rem 0', fontSize: '1.3em', fontFamily: 'serif' }}>
+              U(&beta;) = e<sup>i&beta; &sum;<sub>i</sub> X<sub>i</sub></sup>.
+            </div>
+            
+            <p>To see this concretely, consider</p>
+            
+            <div style={{ textAlign: 'center', margin: '1.5rem 0', fontSize: '1.3em', fontFamily: 'serif' }}>
+              1/&radic;2 (|0&rang; + |1&rang;),
+            </div>
+            
+            <p>where <em>|0&rang;</em> and <em>|1&rang;</em> have corresponding eigenvalues, or equivalently, objective function values. Applying <em>U(&gamma;)</em> gives a relative phase:</p>
+            
+            <div style={{ textAlign: 'center', margin: '1.5rem 0', fontSize: '1.3em', fontFamily: 'serif' }}>
+              1/&radic;2 (e<sup>i&gamma; E<sub>0</sub></sup>|0&rang; + e<sup>i&gamma; E<sub>1</sub></sup>|1&rang;).
+            </div>
+            
+            <p>This relative phase is what allows the amplitudes to change after applying an <em>X</em>-based mixing gate. A weakness in QAOA is periodicity; <em>E<sub>0</sub></em> and <em>E' = E<sub>0</sub> + 2&pi;</em> apply the same phase though their objective values differ. This can be addressed by applying <em>U(&gamma;)</em> and <em>U(&beta;)</em> successively.</p>
+
+            <h3 style={{ fontSize: '1.5rem', marginTop: '2.5rem', marginBottom: '1rem', color: 'var(--travelers-red)' }}>DQI</h3>
+            
+            <p>Decoded quantum interferometry is a more recent method to minimize an objective function. Constraints are encoded into a collection of XOR operations and implemented through phase and CNOT gates. The most difficult part is finding the matrix <em>B</em>, which contains information on the XOR-translated constraints. Our DQI implementation worked, but took too long for our laptops (or even Selene) to run in a reasonable amount of time. Instead, we implemented a DQI-inspired QAOA approach, taking ideas from parity and syndrome qubits.</p>
           </section>
         ) : activeView === "dataset" ? (
           <div className="dataset-wrap">
@@ -517,81 +497,6 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
 
       <PlotLightbox plot={activePlot} onClose={() => setActivePlot(null)} />
       <QuboVisLightbox isOpen={showQuboVis} onClose={() => setShowQuboVis(false)} />
-
-      {activeView === "home" && cardModal ? (
-        <div className="overlay" role="presentation" onClick={() => setCardModal(null)}>
-          <div className="modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-            <h2>{cardModal.mode === "create" ? "Add card" : "Edit card"}</h2>
-            <input
-              autoFocus
-              className="input"
-              value={cardModal.title}
-              onChange={(event) =>
-                setCardModal((current) => (current ? { ...current, title: event.target.value } : current))
-              }
-              placeholder="Task title"
-              maxLength={120}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter" || !cardModal.title.trim()) {
-                  return;
-                }
-
-                event.preventDefault();
-
-                if (cardModal.mode === "create") {
-                  void createCardInDeck(cardModal.deck, cardModal.title);
-                } else {
-                  void saveCard(cardModal.id, { title: cardModal.title.trim() });
-                }
-
-                setCardModal(null);
-              }}
-            />
-
-            <div className="modal-actions">
-              {cardModal.mode === "edit" ? (
-                <button
-                  className="button button-alert"
-                  type="button"
-                  onClick={async () => {
-                    await deleteCardById(cardModal.id);
-                    setCardModal(null);
-                  }}
-                >
-                  Delete
-                </button>
-              ) : (
-                <span />
-              )}
-
-              <div className="modal-actions-right">
-                <button className="button button-soft" type="button" onClick={() => setCardModal(null)}>
-                  Cancel
-                </button>
-                <button
-                  className="button button-primary"
-                  type="button"
-                  onClick={async () => {
-                    if (!cardModal.title.trim()) {
-                      return;
-                    }
-
-                    if (cardModal.mode === "create") {
-                      await createCardInDeck(cardModal.deck, cardModal.title);
-                    } else {
-                      await saveCard(cardModal.id, { title: cardModal.title.trim() });
-                    }
-
-                    setCardModal(null);
-                  }}
-                >
-                  {cardModal.mode === "create" ? "Add" : "Save"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </main>
   );
 }

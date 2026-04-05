@@ -6,7 +6,7 @@ per-package λ as the QAOA comparison rows, runs :func:`run_dqi_with_details` wi
 ``use_bp_decoder=True`` and ``execution='local'`` (Qiskit Aer), then stitches coverage
 bits into an N×M matrix and evaluates total contribution margin with the LTM formula.
 
-After appending one ``algorithm=dqi`` row (with λ matching ``plot_algorithm_comparison_table``
+After appending one ``algorithm=dqi`` row (with λ matching ``plot_visualizations.py algorithm-comparison``
 presets), regenerate ``algorithm_comparison_n5_m3_p1.png`` unless ``--no-plot``.
 
 Requires: ``pip install qiskit qiskit-aer`` (plus cayman deps: numpy, scipy, pulp).
@@ -243,12 +243,13 @@ def main() -> None:
     if not args.no_plot:
         import subprocess
 
-        plot_script = REPO_ROOT / "SOLUTIONS" / "plot_algorithm_comparison_table.py"
+        plot_script = REPO_ROOT / "SOLUTIONS" / "plot_visualizations.py"
         out_name = f"algorithm_comparison_n{args.n}_m{args.m}_p{args.p}.png"
         subprocess.run(
             [
                 sys.executable,
                 str(plot_script),
+                "algorithm-comparison",
                 "--n",
                 str(args.n),
                 "--m",

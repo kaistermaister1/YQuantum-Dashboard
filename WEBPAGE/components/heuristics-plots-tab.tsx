@@ -159,7 +159,7 @@ export const HEURISTICS_PLOTS: DashboardPlot[] = [
     ],
     description: [
       "Uses HEURISTICS/run_summaries.csv rows where num_samples_total = k · M_blocks so total quantum workload scales with the number of independent package blocks.",
-      "Styling matches the other QGars heuristics tiles (generate_plots.py). Local QAOA at fixed N_local and p; linear fit and R² are on the figure; see also SOLUTIONS/plot_runtime_vs_m_blocks.py for a standalone variant."
+      "Styling matches the other QGars heuristics tiles (generate_plots.py). Local QAOA at fixed N_local and p; linear fit and R² are on the figure; see also SOLUTIONS/plot_visualizations.py runtime-vs-m-blocks for a standalone variant."
     ]
   },
   {
@@ -264,21 +264,6 @@ export const HEURISTICS_PLOTS: DashboardPlot[] = [
     description: [
       "Focuses on the hardware resources required for a single package-local sub-problem (N_local).",
       "Demonstrates how the block-diagonal structure makes it more feasible to run on near-term hardware."
-    ]
-  },
-  {
-    id: "compiled_depth",
-    category: "Hardware Resources",
-    title: "Compiled Circuit Depth",
-    subtitle: "Compiled Depth vs Block Size (N_local)",
-    src: HEURISTICS_PLOT_PUBLIC_PATHS.compiled_depth,
-    alt: "Line plot showing Compiled Circuit Depth vs N_local.",
-    summary: [
-      "Compiled depth scales with block size."
-    ],
-    description: [
-      "Shows how the compiled circuit depth grows as the number of coverages per package increases.",
-      "Deeper circuits are more susceptible to hardware noise, impacting the final solution quality."
     ]
   },
   {
