@@ -36,8 +36,13 @@ def import_guppylang_with_workaround() -> None:
     restore_machine: Callable[[], str] | None = None
     if sys.platform == "win32" and platform.machine() in ("ARM64", "arm64"):
         spec = importlib.util.find_spec("wasmtime")
-        if spec is not None and spec.origin:
-            root = Path(spec.origin).parent
+        root: Path | None = None
+        if spec is not None:
+            if spec.origin:
+                root = Path(spec.origin).parent
+            elif spec.submodule_search_locations:
+                root = Path(next(iter(spec.submodule_search_locations)))
+        if root is not None:
             aarch_dll = root / "win32-aarch64" / "_wasmtime.dll"
             x64_dll = root / "win32-x86_64" / "_wasmtime.dll"
             if not aarch_dll.is_file() and x64_dll.is_file():
