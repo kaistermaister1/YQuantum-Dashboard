@@ -26,3 +26,9 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# cayman: local benchmark / scratch output (regenerate with scripts)
+subprojects/cayman/artifacts/benchmark_official/
+subprojects/cayman/artifacts/dqi_benchmark_comparison.png
+subprojects/cayman/artifacts/dqi_objective_10var.png
+subprojects/cayman/scripts/Untitled
