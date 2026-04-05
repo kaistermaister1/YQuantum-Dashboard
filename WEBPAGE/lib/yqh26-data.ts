@@ -154,6 +154,7 @@ function round(value: number, digits = 3) {
 
 const dataDirectory = path.join(
   process.cwd(),
+  "..",
   "subprojects",
   "will",
   "Travelers",
