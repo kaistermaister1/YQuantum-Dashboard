@@ -14,7 +14,3 @@ venv/
 
 # Office lock/temp
 ~$*
-
-# Local build artifact (Raylib)
-qubo_vis/qubo_vis
-qubo_vis/qubo_vis.exe

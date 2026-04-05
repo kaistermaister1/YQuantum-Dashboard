@@ -1,4 +1,4 @@
-"""Tests for ``qubo_qaoa_p1.run_qaoa_p2_on_block`` (Guppy p=2 smoke + bruteforce checks)."""
+"""Tests for ``qubo_qaoa.run_qaoa_p2_on_block`` (Guppy p=2 smoke + bruteforce checks)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.qubo_qaoa_p1 import bruteforce_minimize_qubo, run_qaoa_p2_on_block
+from src.qubo_qaoa import bruteforce_minimize_qubo, run_qaoa_p2_on_block
 
 try:
     import guppylang  # noqa: F401
