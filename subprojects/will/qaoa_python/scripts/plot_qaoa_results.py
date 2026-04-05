@@ -59,7 +59,7 @@ def _cmd_histogram(args: argparse.Namespace) -> int:
     try:
         import matplotlib.pyplot as plt
     except ImportError as e:
-        print("Install matplotlib: pip install matplotlib", file=sys.stderr)
+        print("Install matplotlib:  python -m pip install matplotlib", file=sys.stderr)
         raise SystemExit(1) from e
 
     from src.qubo_qaoa import bruteforce_minimize_qubo, run_qaoa_p1_on_block
@@ -138,7 +138,7 @@ def _cmd_landscape(args: argparse.Namespace) -> int:
     try:
         import matplotlib.pyplot as plt
     except ImportError as e:
-        print("Install matplotlib: pip install matplotlib", file=sys.stderr)
+        print("Install matplotlib:  python -m pip install matplotlib", file=sys.stderr)
         raise SystemExit(1) from e
 
     from src.qubo_qaoa import run_qaoa_p1_on_block
