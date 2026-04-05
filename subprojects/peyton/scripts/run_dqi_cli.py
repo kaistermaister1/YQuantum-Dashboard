@@ -65,6 +65,23 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--maxiter", type=int, default=60)
     ap.add_argument("--n-samples", type=int, default=64)
     ap.add_argument("--max-qubits", type=int, default=50)
+    ap.add_argument(
+        "--no-variational",
+        action="store_true",
+        help="Skip classical optimization; use fixed gammas (default [1.0]*p). Implies one shot unless --fixed-gammas sets multiple layers.",
+    )
+    ap.add_argument(
+        "--fixed-gammas",
+        type=str,
+        default=None,
+        help="Comma-separated layer gammas for --no-variational (length must equal --p).",
+    )
+    ap.add_argument(
+        "--fixed-betas",
+        type=str,
+        default=None,
+        help="Comma-separated mixer betas for --no-variational with --legacy-ising (length must equal --p).",
+    )
 
     ap.add_argument(
         "--execution",
@@ -117,11 +134,21 @@ def main() -> int:
     nexus_timeout = None if args.nexus_no_timeout else float(args.nexus_timeout)
     exec_key = args.execution.replace("-", "_")
 
+    fixed_gammas = None
+    if args.fixed_gammas is not None:
+        fixed_gammas = [float(x.strip()) for x in args.fixed_gammas.split(",") if x.strip() != ""]
+    fixed_betas = None
+    if args.fixed_betas is not None:
+        fixed_betas = [float(x.strip()) for x in args.fixed_betas.split(",") if x.strip() != ""]
+
     best_x, best_value, meta = run_dqi_with_details(
         target,
         p=args.p,
         optimizer=args.optimizer,
         legacy_ising=args.legacy_ising,
+        variational=not args.no_variational,
+        fixed_gammas=fixed_gammas,
+        fixed_betas=fixed_betas,
         shots=args.shots,
         seed=args.seed,
         rng_seed=args.rng_seed,

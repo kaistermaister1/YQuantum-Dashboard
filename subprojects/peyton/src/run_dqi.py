@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 
 from src.dqi_core import bitstring_to_array, hamming_weight
-from src.dqi_optimize import DqiOptimizationResult, optimize_dqi
+from src.dqi_optimize import DqiOptimizationResult, optimize_dqi, run_dqi_fixed_angles
 
 
 @dataclass
@@ -57,6 +57,9 @@ def run_dqi(
     phase_c: np.ndarray | None = None,
     normalize_phase_c: bool = True,
     legacy_ising: bool = False,
+    variational: bool = True,
+    fixed_gammas: list[float] | None = None,
+    fixed_betas: list[float] | None = None,
     shots: int = 512,
     seed: int = 0,
     rng_seed: int = 0,
@@ -78,32 +81,69 @@ def run_dqi(
     inferred from the QUBO automatically; supply ``B`` and ``v`` from an ILP→max-XORSAT
     conversion when you need them in the circuit). Set ``legacy_ising=True`` for the previous
     Ising variational circuit.
+
+    Set ``variational=False`` to run a single circuit evaluation with fixed angles: by default
+    ``gammas = [1.0] * p`` (parity: one ``Rz(gamma * c_i)`` block per layer). Pass ``fixed_gammas``
+    to override (length must equal ``p``). For ``legacy_ising=True``, pass ``fixed_betas`` of
+    length ``p`` or omit to use ``(π/2)`` per layer.
     """
     q, meta = _extract_qubo_and_meta(Q)
-    res = optimize_dqi(
-        q,
-        p=p,
-        optimizer=optimizer,  # type: ignore[arg-type]
-        statistic=statistic,  # type: ignore[arg-type]
-        B=B,
-        v=v,
-        phase_c=phase_c,
-        normalize_phase_c=normalize_phase_c,
-        legacy_ising=legacy_ising,
-        shots=shots,
-        seed=seed,
-        rng_seed=rng_seed,
-        maxiter=maxiter,
-        n_samples=n_samples,
-        mixer=mixer,
-        max_qubits=max_qubits,
-        constant_offset=float(meta["constant_offset"]),
-        execution=execution,
-        nexus_hugr_name=nexus_hugr_name,
-        nexus_job_name=nexus_job_name,
-        nexus_helios_system=nexus_helios_system,
-        nexus_timeout=nexus_timeout,
-    )
+    if variational:
+        res = optimize_dqi(
+            q,
+            p=p,
+            optimizer=optimizer,  # type: ignore[arg-type]
+            statistic=statistic,  # type: ignore[arg-type]
+            B=B,
+            v=v,
+            phase_c=phase_c,
+            normalize_phase_c=normalize_phase_c,
+            legacy_ising=legacy_ising,
+            shots=shots,
+            seed=seed,
+            rng_seed=rng_seed,
+            maxiter=maxiter,
+            n_samples=n_samples,
+            mixer=mixer,
+            max_qubits=max_qubits,
+            constant_offset=float(meta["constant_offset"]),
+            execution=execution,
+            nexus_hugr_name=nexus_hugr_name,
+            nexus_job_name=nexus_job_name,
+            nexus_helios_system=nexus_helios_system,
+            nexus_timeout=nexus_timeout,
+        )
+    else:
+        if fixed_gammas is None:
+            gammas = [1.0] * int(p)
+        else:
+            if len(fixed_gammas) != int(p):
+                raise ValueError(f"fixed_gammas must have length p={p}, got {len(fixed_gammas)}")
+            gammas = [float(x) for x in fixed_gammas]
+        if legacy_ising and fixed_betas is not None and len(fixed_betas) != int(p):
+            raise ValueError(f"fixed_betas must have length p={p}, got {len(fixed_betas)}")
+        betas_arg = None if fixed_betas is None else [float(x) for x in fixed_betas]
+        res = run_dqi_fixed_angles(
+            q,
+            gammas,
+            B=B,
+            v=v,
+            phase_c=phase_c,
+            normalize_phase_c=normalize_phase_c,
+            legacy_ising=legacy_ising,
+            betas=betas_arg,
+            statistic=statistic,  # type: ignore[arg-type]
+            shots=shots,
+            seed=seed,
+            mixer=mixer,
+            max_qubits=max_qubits,
+            constant_offset=float(meta["constant_offset"]),
+            execution=execution,
+            nexus_hugr_name=nexus_hugr_name,
+            nexus_job_name=nexus_job_name,
+            nexus_helios_system=nexus_helios_system,
+            nexus_timeout=nexus_timeout,
+        )
     best_x = bitstring_to_array(res.stats_at_best.best_bitstring)
     return best_x, float(res.stats_at_best.best_value)
 
@@ -118,6 +158,9 @@ def run_dqi_with_details(
     phase_c: np.ndarray | None = None,
     normalize_phase_c: bool = True,
     legacy_ising: bool = False,
+    variational: bool = True,
+    fixed_gammas: list[float] | None = None,
+    fixed_betas: list[float] | None = None,
     shots: int = 512,
     seed: int = 0,
     rng_seed: int = 0,
@@ -134,30 +177,62 @@ def run_dqi_with_details(
 ) -> tuple[np.ndarray, float, DqiRunMetadata]:
     """Run DQI and return `(best_solution, value, metadata)`."""
     q, meta = _extract_qubo_and_meta(Q)
-    res = optimize_dqi(
-        q,
-        p=p,
-        optimizer=optimizer,  # type: ignore[arg-type]
-        statistic=statistic,  # type: ignore[arg-type]
-        B=B,
-        v=v,
-        phase_c=phase_c,
-        normalize_phase_c=normalize_phase_c,
-        legacy_ising=legacy_ising,
-        shots=shots,
-        seed=seed,
-        rng_seed=rng_seed,
-        maxiter=maxiter,
-        n_samples=n_samples,
-        mixer=mixer,
-        max_qubits=max_qubits,
-        constant_offset=float(meta["constant_offset"]),
-        execution=execution,
-        nexus_hugr_name=nexus_hugr_name,
-        nexus_job_name=nexus_job_name,
-        nexus_helios_system=nexus_helios_system,
-        nexus_timeout=nexus_timeout,
-    )
+    if variational:
+        res = optimize_dqi(
+            q,
+            p=p,
+            optimizer=optimizer,  # type: ignore[arg-type]
+            statistic=statistic,  # type: ignore[arg-type]
+            B=B,
+            v=v,
+            phase_c=phase_c,
+            normalize_phase_c=normalize_phase_c,
+            legacy_ising=legacy_ising,
+            shots=shots,
+            seed=seed,
+            rng_seed=rng_seed,
+            maxiter=maxiter,
+            n_samples=n_samples,
+            mixer=mixer,
+            max_qubits=max_qubits,
+            constant_offset=float(meta["constant_offset"]),
+            execution=execution,
+            nexus_hugr_name=nexus_hugr_name,
+            nexus_job_name=nexus_job_name,
+            nexus_helios_system=nexus_helios_system,
+            nexus_timeout=nexus_timeout,
+        )
+    else:
+        if fixed_gammas is None:
+            gammas = [1.0] * int(p)
+        else:
+            if len(fixed_gammas) != int(p):
+                raise ValueError(f"fixed_gammas must have length p={p}, got {len(fixed_gammas)}")
+            gammas = [float(x) for x in fixed_gammas]
+        if legacy_ising and fixed_betas is not None and len(fixed_betas) != int(p):
+            raise ValueError(f"fixed_betas must have length p={p}, got {len(fixed_betas)}")
+        betas_arg = None if fixed_betas is None else [float(x) for x in fixed_betas]
+        res = run_dqi_fixed_angles(
+            q,
+            gammas,
+            B=B,
+            v=v,
+            phase_c=phase_c,
+            normalize_phase_c=normalize_phase_c,
+            legacy_ising=legacy_ising,
+            betas=betas_arg,
+            statistic=statistic,  # type: ignore[arg-type]
+            shots=shots,
+            seed=seed,
+            mixer=mixer,
+            max_qubits=max_qubits,
+            constant_offset=float(meta["constant_offset"]),
+            execution=execution,
+            nexus_hugr_name=nexus_hugr_name,
+            nexus_job_name=nexus_job_name,
+            nexus_helios_system=nexus_helios_system,
+            nexus_timeout=nexus_timeout,
+        )
 
     bitstring = res.stats_at_best.best_bitstring
     best_x = bitstring_to_array(bitstring)
