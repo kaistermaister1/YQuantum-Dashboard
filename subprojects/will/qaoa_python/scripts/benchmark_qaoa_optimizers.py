@@ -205,7 +205,20 @@ def main() -> int:
     color_map = {"grid": "#0066CC", "random": "#5BA3D6", "cobyla": "#00356B", "spsa": "#2D8C3C"}
     bar_colors = [color_map[r.method] for r in rows]
 
-    fig, axes = plt.subplots(2, 2, figsize=(10.5, 8.0), layout="constrained")
+    fig, axes = plt.subplots(2, 2, figsize=(10.5, 9.2), layout="constrained")
+
+    cap_best = (
+        "Good: bars near the green dashed line (exact block minimum); bad: far above it (never saw low-energy states)."
+    )
+    cap_obj = (
+        "Good: low bars; bad: high — with stat=mean, high means typical shots stay high-energy even if one bitstring got lucky."
+    )
+    cap_time = (
+        "Lower is faster wall-clock; only compare across methods after similar Selene counts (next plot) and shots/eval."
+    )
+    cap_nev = (
+        "Good: fewer evaluations for the same quality above; bad: many calls with no gain — wasted quantum budget."
+    )
 
     ax = axes[0, 0]
     ax.bar(names, [r.best_qubo_energy for r in rows], color=bar_colors, edgecolor="white")
@@ -215,29 +228,38 @@ def main() -> int:
         ax.axhline(bruteforce_e, color="#2D8C3C", linestyle="--", linewidth=2, label="exact block min")
         ax.legend(loc="upper right", fontsize=8)
     ax.grid(True, axis="y", alpha=0.25)
+    ax.set_xlabel(cap_best, fontsize=8, color="#333333", labelpad=10)
 
     ax = axes[0, 1]
     ax.bar(names, [r.objective for r in rows], color=bar_colors, edgecolor="white")
     ax.set_ylabel(f"Optimizer objective ({stat})")
     ax.set_title("What the outer loop minimized")
     ax.grid(True, axis="y", alpha=0.25)
+    ax.set_xlabel(cap_obj, fontsize=8, color="#333333", labelpad=10)
 
     ax = axes[1, 0]
     ax.bar(names, [r.seconds for r in rows], color=bar_colors, edgecolor="white")
     ax.set_ylabel("Wall time (s)")
     ax.set_title("Runtime (includes Selene + Guppy compile per eval)")
     ax.grid(True, axis="y", alpha=0.25)
+    ax.set_xlabel(cap_time, fontsize=8, color="#333333", labelpad=10)
 
     ax = axes[1, 1]
     ax.bar(names, [r.n_evaluations for r in rows], color=bar_colors, edgecolor="white")
     ax.set_ylabel("Selene evaluations")
     ax.set_title("Number of circuit runs (kernel builds)")
     ax.grid(True, axis="y", alpha=0.25)
+    ax.set_xlabel(cap_nev, fontsize=8, color="#333333", labelpad=10)
 
     suf = f"  |  {args.title_suffix}" if args.title_suffix else ""
+    if args.subsample_coverages > 0 and args.subsample_packages > 0:
+        sub_txt = f"{args.subsample_coverages}×{args.subsample_packages} coverages×packages"
+    else:
+        sub_txt = "full LTM instance (no subsample)"
     fig.suptitle(
-        f"p=1 QAOA optimizer benchmark  |  n={n} qubits  |  {shots} shots/eval  |  stat={stat}{suf}",
-        fontsize=11,
+        f"p=1 QAOA optimizer benchmark  |  {shots} shots/eval  |  stat={stat}{suf}\n"
+        f"Block: package m={args.package}, QUBO size n={n} binary vars; data: {sub_txt}.",
+        fontsize=10,
     )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
