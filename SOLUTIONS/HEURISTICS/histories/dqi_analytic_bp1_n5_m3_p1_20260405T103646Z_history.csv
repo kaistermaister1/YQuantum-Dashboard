@@ -1,0 +1,4 @@
+run_id,algorithm,bp_mode,package_index,package_name,objective_mode,objective_lower_bound,expanded_num_vars,num_constraints,B_rows,B_cols,ell,dqi_expected_f,dqi_expected_s,quantum_attempted,quantum_ran,quantum_postselected_shots,quantum_best_assignment,note
+dqi_analytic_bp1_n5_m3_p1_20260405T103646Z,dqi,BP1,0,Young Driver Budget,compressed,5,5,3,205,95,1,11.874765396118164,108.43738555908203,1,0,,,"skipped full quantum simulation because reduced max-XOR has 205 rows, above row_limit=24"
+dqi_analytic_bp1_n5_m3_p1_20260405T103646Z,dqi,BP1,1,Young Family Starter,compressed,4,5,3,205,95,1,11.874765396118164,108.43738555908203,1,0,,,"skipped full quantum simulation because reduced max-XOR has 205 rows, above row_limit=24"
+dqi_analytic_bp1_n5_m3_p1_20260405T103646Z,dqi,BP1,2,Suburban Homeowner,compressed,4,5,3,196,92,1,11.678570747375488,103.83928680419922,1,0,,,"skipped full quantum simulation because reduced max-XOR has 196 rows, above row_limit=24"

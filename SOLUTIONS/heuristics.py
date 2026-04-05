@@ -8,6 +8,7 @@ import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+import sys
 from typing import Any, Callable, Sequence
 
 import numpy as np
@@ -18,6 +19,12 @@ import qaoa_selene
 from qaoa_plots import save_training_loss_plot
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+DQI_ADAPTER_ROOT = REPO_ROOT / "subprojects" / "kai" / "kai-dqi"
+if str(DQI_ADAPTER_ROOT) not in sys.path:
+    sys.path.insert(0, str(DQI_ADAPTER_ROOT))
+
+import travelers_dqi
+
 OUTPUT_ROOT = Path(__file__).resolve().parent / "HEURISTICS"
 SUMMARIES_DIR = OUTPUT_ROOT / "summaries"
 HISTORIES_DIR = OUTPUT_ROOT / "histories"
@@ -26,12 +33,20 @@ PLOTS_DIR = OUTPUT_ROOT / "plots"
 RUN_SUMMARY_INDEX_PATH = OUTPUT_ROOT / "run_summaries.csv"
 
 # Top-level run config
-ALGORITHM = "classical"  # "classical", "qaoa", or "dqi" when implemented
-N_COVERAGES = 4
-M_PACKAGES = 2
+ALGORITHM = "dqi"  # "classical", "qaoa", or "dqi"
+N_COVERAGES = 10
+M_PACKAGES = 3
 P_DEPTH = 1
 QAOA_EXECUTION_TARGET = "local"  # "local" or "selene"
 QAOA_OPTIMIZER = "cobyla"  # "cobyla" or "spsa"
+DQI_BP_MODE = "BP1"  # "BP1" or "BP2"
+DQI_OBJECTIVE_MODE = "compressed"  # "compressed" or "scaled"
+DQI_OBJECTIVE_SCALE = 1
+DQI_OBJECTIVE_TARGET_MAX = 3
+DQI_ELL = 1
+DQI_BP_ITERATIONS = 2
+DQI_TRY_QUANTUM = True
+DQI_QUANTUM_ROW_LIMIT = 24
 SEED = 0
 GENERATE_TRAINING_LOSS_PLOT = False
 
@@ -85,6 +100,28 @@ CLASSICAL_HISTORY_FIELDS = [
     "status",
     "runtime_sec",
     "profit",
+]
+
+DQI_HISTORY_FIELDS = [
+    "run_id",
+    "algorithm",
+    "bp_mode",
+    "package_index",
+    "package_name",
+    "objective_mode",
+    "objective_lower_bound",
+    "expanded_num_vars",
+    "num_constraints",
+    "B_rows",
+    "B_cols",
+    "ell",
+    "dqi_expected_f",
+    "dqi_expected_s",
+    "quantum_attempted",
+    "quantum_ran",
+    "quantum_postselected_shots",
+    "quantum_best_assignment",
+    "note",
 ]
 
 
@@ -243,6 +280,26 @@ def _count_feasible_samples(
 def _qaoa_resource_fields(block: qaoa.QuboBlock, p: int) -> tuple[int, str, int]:
     _, zz_terms = qaoa.qubo_to_ising_pauli_coefficients(block.Q)
     return block.n_vars, "", int(p) * len(zz_terms)
+
+
+def _extract_dqi_solution_matrix(
+    workflow_result: travelers_dqi.DqiWorkflowResult,
+    problem,
+) -> tuple[np.ndarray, bool]:
+    x_matrix = np.full((problem.N, problem.M), -1, dtype=int)
+    all_packages_have_assignments = True
+    for block in workflow_result.blocks:
+        assignment = block.quantum_best_semantic_assignment
+        if assignment is None:
+            all_packages_have_assignments = False
+            continue
+        for coverage_index in range(problem.N):
+            key = f"x_{coverage_index}"
+            if key in assignment:
+                x_matrix[coverage_index, block.package_index] = int(assignment[key])
+            else:
+                all_packages_have_assignments = False
+    return x_matrix, all_packages_have_assignments
 
 
 def _run_classical(
@@ -523,6 +580,169 @@ def _run_qaoa(
     return summary_row
 
 
+def _run_dqi(
+    n: int,
+    m: int,
+    seed: int,
+    bp_mode: str,
+    objective_mode: str,
+    objective_scale: int,
+    objective_target_max: int,
+    ell: int,
+    bp_iterations: int,
+    try_quantum: bool,
+    quantum_row_limit: int,
+    summaries_dir: Path,
+    histories_dir: Path,
+    solutions_dir: Path,
+) -> dict[str, Any]:
+    if bp_mode not in {"BP1", "BP2"}:
+        raise ValueError("bp_mode must be 'BP1' or 'BP2'")
+
+    workflow_start = time.perf_counter()
+    problem = travelers_dqi.subsample_problem(
+        travelers_dqi.load_ltm_instance(travelers_dqi.DATA_DIR),
+        n_coverages=n,
+        n_packages=m,
+    )
+    workflow_result = travelers_dqi.solve_dqi_workflow(
+        n=n,
+        m=m,
+        objective_mode=objective_mode,
+        objective_scale=objective_scale,
+        objective_target_max=objective_target_max,
+        bp_mode=bp_mode,
+        ell=ell,
+        bp_iterations=bp_iterations,
+        seed=seed,
+        try_quantum=try_quantum,
+        quantum_row_limit=quantum_row_limit,
+    )
+    runtime_sec = time.perf_counter() - workflow_start
+    classical_opt = classical_baseline.solve_classical_baseline(n=n, m=m)
+
+    run_id = _build_run_id(
+        "dqi",
+        n=n,
+        m=m,
+        p=workflow_result.ell,
+        target="analytic",
+        optimizer=bp_mode.lower(),
+    )
+    stem = run_id
+
+    x_matrix, has_complete_solution = _extract_dqi_solution_matrix(workflow_result, problem)
+    coverage_names = [coverage.name for coverage in problem.coverages]
+    package_names = problem.package_names or [f"package {index + 1}" for index in range(problem.M)]
+    solution_path = _write_solution_matrix_csv(
+        _path_for_csv(solutions_dir, f"{stem}_solution"),
+        matrix=x_matrix,
+        coverage_names=coverage_names,
+        package_names=package_names,
+    )
+
+    history_rows: list[dict[str, Any]] = []
+    for block in workflow_result.blocks:
+        history_rows.append(
+            {
+                "run_id": run_id,
+                "algorithm": "dqi",
+                "bp_mode": bp_mode,
+                "package_index": int(block.package_index),
+                "package_name": block.package_name,
+                "objective_mode": workflow_result.objective_mode,
+                "objective_lower_bound": int(block.objective_lower_bound),
+                "expanded_num_vars": int(block.expanded_num_vars),
+                "num_constraints": int(block.num_constraints),
+                "B_rows": int(block.B_shape[0]),
+                "B_cols": int(block.B_shape[1]),
+                "ell": int(block.ell),
+                "dqi_expected_f": float(block.dqi_expected_f) if block.dqi_expected_f is not None else "",
+                "dqi_expected_s": float(block.dqi_expected_s) if block.dqi_expected_s is not None else "",
+                "quantum_attempted": int(bool(block.quantum_attempted)),
+                "quantum_ran": int(bool(block.quantum_ran)),
+                "quantum_postselected_shots": (
+                    int(block.quantum_postselected_shots)
+                    if block.quantum_postselected_shots is not None
+                    else ""
+                ),
+                "quantum_best_assignment": (
+                    json.dumps(block.quantum_best_semantic_assignment, sort_keys=True)
+                    if block.quantum_best_semantic_assignment is not None
+                    else ""
+                ),
+                "note": block.note,
+            }
+        )
+    history_path = _write_csv_rows(
+        _path_for_csv(histories_dir, f"{stem}_history"),
+        DQI_HISTORY_FIELDS,
+        history_rows,
+    )
+
+    postselected_total = sum(
+        int(block.quantum_postselected_shots)
+        for block in workflow_result.blocks
+        if block.quantum_postselected_shots is not None
+    )
+    objective_eval_count = len(workflow_result.blocks)
+
+    best_profit: float | str = ""
+    if has_complete_solution:
+        c_matrix = np.array(workflow_result.c_im_float, dtype=float)
+        mask = np.clip(x_matrix, 0, 1)
+        best_profit = float(np.sum(c_matrix * mask))
+
+    notes_parts = [
+        f"bp_mode={bp_mode}",
+        f"objective_mode={workflow_result.objective_mode}",
+        f"bp_iterations={bp_iterations}",
+        f"try_quantum={int(bool(try_quantum))}",
+        "solution matrix uses -1 where no quantum semantic assignment was available",
+        "analytic DQI estimates come from the patched package-local max-XOR workflow",
+    ]
+    if not has_complete_solution:
+        notes_parts.append(
+            "best_profit left blank because the current DQI run did not yield a complete package matrix",
+        )
+
+    summary_row = {
+        "run_id": run_id,
+        "algorithm": "dqi",
+        "optimizer": bp_mode,
+        "seed": int(seed),
+        "N_local": int(problem.N),
+        "M_blocks": int(problem.M),
+        "n_total": int(problem.N) * int(problem.M),
+        "p": int(workflow_result.ell),
+        "lambda": "",
+        "runtime_sec": float(runtime_sec),
+        "best_profit": best_profit,
+        "classical_opt_profit": float(classical_opt["profit"]),
+        "num_samples_total": "",
+        "num_samples_feasible": "",
+        "num_samples_postselected": int(postselected_total),
+        "num_objective_evals": int(objective_eval_count),
+        "num_qubits": "",
+        "circuit_depth": "",
+        "two_qubit_gate_count": "",
+        "solution_path": _path_to_repo_relative_string(solution_path),
+        "history_path": _path_to_repo_relative_string(history_path),
+        "notes": "; ".join(notes_parts),
+    }
+
+    summary_path = _write_csv_rows(
+        _path_for_csv(summaries_dir, f"{stem}_summary"),
+        SUMMARY_FIELDS,
+        [summary_row],
+    )
+    _append_csv_row(RUN_SUMMARY_INDEX_PATH, SUMMARY_FIELDS, summary_row)
+    print(f"Saved summary to {_path_to_repo_relative_string(summary_path)}")
+    print(f"Saved solution to {_path_to_repo_relative_string(solution_path)}")
+    print(f"Saved history to {_path_to_repo_relative_string(history_path)}")
+    return summary_row
+
+
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--algorithm", default=ALGORITHM, choices=["classical", "qaoa", "dqi"])
@@ -531,6 +751,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--p", type=int, default=P_DEPTH)
     parser.add_argument("--target", default=QAOA_EXECUTION_TARGET, choices=["local", "selene"])
     parser.add_argument("--optimizer", default=QAOA_OPTIMIZER, choices=["cobyla", "spsa"])
+    parser.add_argument("--bp-mode", default=DQI_BP_MODE, choices=["BP1", "BP2"])
+    parser.add_argument("--dqi-objective-mode", default=DQI_OBJECTIVE_MODE, choices=["compressed", "scaled"])
+    parser.add_argument("--dqi-objective-scale", type=int, default=DQI_OBJECTIVE_SCALE)
+    parser.add_argument("--dqi-objective-target-max", type=int, default=DQI_OBJECTIVE_TARGET_MAX)
+    parser.add_argument("--dqi-ell", type=int, default=DQI_ELL)
+    parser.add_argument("--dqi-bp-iterations", type=int, default=DQI_BP_ITERATIONS)
+    parser.add_argument("--dqi-try-quantum", type=int, default=int(DQI_TRY_QUANTUM), choices=[0, 1])
+    parser.add_argument("--dqi-quantum-row-limit", type=int, default=DQI_QUANTUM_ROW_LIMIT)
     parser.add_argument("--seed", type=int, default=SEED)
     return parser.parse_args(argv)
 
@@ -540,7 +768,22 @@ def main(argv: Sequence[str] | None = None) -> dict[str, Any]:
     _ensure_output_dirs()
 
     if args.algorithm == "dqi":
-        raise NotImplementedError("DQI logging is not implemented yet.")
+        return _run_dqi(
+            n=args.n,
+            m=args.m,
+            seed=args.seed,
+            bp_mode=args.bp_mode,
+            objective_mode=args.dqi_objective_mode,
+            objective_scale=args.dqi_objective_scale,
+            objective_target_max=args.dqi_objective_target_max,
+            ell=args.dqi_ell,
+            bp_iterations=args.dqi_bp_iterations,
+            try_quantum=bool(args.dqi_try_quantum),
+            quantum_row_limit=args.dqi_quantum_row_limit,
+            summaries_dir=SUMMARIES_DIR,
+            histories_dir=HISTORIES_DIR,
+            solutions_dir=SOLUTIONS_DIR,
+        )
     if args.algorithm == "classical":
         return _run_classical(
             n=args.n,
