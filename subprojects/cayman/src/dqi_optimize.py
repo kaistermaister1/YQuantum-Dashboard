@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from typing import Literal
+import qnexus
 
 import numpy as np
 
@@ -108,6 +109,7 @@ def optimize_dqi(
         vec = _clip_params(theta, p)
         gammas = [float(v) for v in vec[:p]]
         betas = [float(v) for v in vec[p:]]
+        project = qnexus.projects.get_or_create(name="dqi-test")
         stats = sample_dqi(
             q,
             gammas=gammas,
@@ -123,6 +125,7 @@ def optimize_dqi(
             nexus_helios_system=nexus_helios_system,
             nexus_timeout=nexus_timeout,
             eval_tag=str(eval_idx),
+            project=project,
         )
         obj = _objective(q, stats, statistic=statistic, constant_offset=constant_offset)
         history.append(float(obj))

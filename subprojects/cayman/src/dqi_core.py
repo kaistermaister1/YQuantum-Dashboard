@@ -244,7 +244,7 @@ def sample_dqi(
     mixer: str = "rx",
     max_qubits: int = 50,
     constant_offset: float = 0.0,
-    execution: str = "local",
+    execution: str = "nexus_selene",
     nexus_hugr_name: str = "dqi-hugr",
     nexus_job_name: str = "dqi-execute",
     nexus_helios_system: str = "Helios-1",
