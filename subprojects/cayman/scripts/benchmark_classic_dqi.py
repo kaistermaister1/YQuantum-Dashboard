@@ -111,7 +111,7 @@ def _bruteforce_opt_f(B: np.ndarray, v: np.ndarray, *, max_nvars: int) -> dict[s
     return {"best_f": float(best_f), "best_s": float(best_s), "runtime_s": float(dt)}
 
 
-def _plot(rows: list[dict], out_path: Path) -> None:
+def _plot_main(rows: list[dict], out_path: Path) -> None:
     ns = [int(r["n"]) for r in rows]
     dqi_f = [float(r["classic_dqi"]["expected_f"]) if r["classic_dqi"]["expected_f"] is not None else np.nan for r in rows]
     rnd_f = [float(r["random_uniform"]["expected_f"]) for r in rows]
@@ -137,6 +137,91 @@ def _plot(rows: list[dict], out_path: Path) -> None:
     axes[1].set_title("Classic DQI post-selection rate")
     axes[1].grid(True, alpha=0.25)
 
+    fig.savefig(out_path, dpi=150)
+
+
+def _plot_runtime(rows: list[dict], out_path: Path) -> None:
+    ns = [int(r["n"]) for r in rows]
+    dqi_t = [float(r["classic_dqi"]["runtime_s"]) for r in rows]
+    rnd_t = [float(r["random_uniform"]["runtime_s"]) for r in rows]
+    bf_t = [float(r["bruteforce"]["runtime_s"]) if r.get("bruteforce") is not None else np.nan for r in rows]
+
+    fig, ax = plt.subplots(figsize=(8.0, 4.6), layout="constrained")
+    ax.plot(ns, dqi_t, marker="o", linewidth=1.6, label="Classic DQI runtime")
+    ax.plot(ns, rnd_t, marker="s", linewidth=1.2, label="Random uniform runtime")
+    if not np.all(np.isnan(bf_t)):
+        ax.plot(ns, bf_t, marker="^", linewidth=1.2, label="Exact brute runtime (small n_vars)")
+    ax.set_xlabel("Coverage count n")
+    ax.set_ylabel("Runtime (s)")
+    ax.set_title("Classic benchmark runtime")
+    ax.set_yscale("log")
+    ax.grid(True, alpha=0.25, which="both")
+    ax.legend(loc="best")
+    fig.savefig(out_path, dpi=150)
+
+
+def _plot_workflow_cost(rows: list[dict], out_path: Path) -> None:
+    ns = [int(r["n"]) for r in rows]
+    dqi_cost = [float(r["classic_dqi"]["cost"]) for r in rows]
+    rnd_cost = [float(r["random_uniform"]["cost"]) for r in rows]
+
+    fig, ax = plt.subplots(figsize=(8.0, 4.6), layout="constrained")
+    ax.plot(ns, dqi_cost, marker="o", linewidth=1.6, label="Classic DQI cost (shots)")
+    ax.plot(ns, rnd_cost, marker="s", linewidth=1.2, label="Random uniform cost (samples)")
+    ax.set_xlabel("Coverage count n")
+    ax.set_ylabel("Workflow cost")
+    ax.set_title("Workflow cost trend")
+    ax.set_yscale("log")
+    ax.grid(True, alpha=0.25, which="both")
+    ax.legend(loc="best")
+    fig.savefig(out_path, dpi=150)
+
+
+def _plot_expected_s(rows: list[dict], out_path: Path) -> None:
+    ns = [int(r["n"]) for r in rows]
+    dqi_s = [float(r["classic_dqi"]["expected_s"]) if r["classic_dqi"]["expected_s"] is not None else np.nan for r in rows]
+    rnd_s = [float(r["random_uniform"]["expected_s"]) for r in rows]
+    best_s = [float(r["bruteforce"]["best_s"]) if r.get("bruteforce") is not None else np.nan for r in rows]
+
+    fig, ax = plt.subplots(figsize=(8.0, 4.6), layout="constrained")
+    ax.plot(ns, dqi_s, marker="o", linewidth=1.6, label="Classic DQI <s>")
+    ax.plot(ns, rnd_s, marker="s", linewidth=1.2, label="Random uniform <s>")
+    if not np.all(np.isnan(best_s)):
+        ax.plot(ns, best_s, marker="^", linewidth=1.2, label="Exact best s (small n_vars)")
+    ax.set_xlabel("Coverage count n")
+    ax.set_ylabel("Expected satisfied checks <s>")
+    ax.set_title("Parity-check satisfaction comparison")
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="best")
+    fig.savefig(out_path, dpi=150)
+
+
+def _plot_gap(rows: list[dict], out_path: Path) -> None:
+    ns = [int(r["n"]) for r in rows]
+    dqi_gap: list[float] = []
+    rnd_gap: list[float] = []
+    for row in rows:
+        bf = row.get("bruteforce")
+        if bf is None:
+            dqi_gap.append(np.nan)
+            rnd_gap.append(np.nan)
+            continue
+        best_f = float(bf["best_f"])
+        denom = max(abs(best_f), 1e-12)
+        dqi_f = float(row["classic_dqi"]["expected_f"]) if row["classic_dqi"]["expected_f"] is not None else np.nan
+        rnd_f = float(row["random_uniform"]["expected_f"])
+        dqi_gap.append((best_f - dqi_f) / denom if not np.isnan(dqi_f) else np.nan)
+        rnd_gap.append((best_f - rnd_f) / denom)
+
+    fig, ax = plt.subplots(figsize=(8.0, 4.6), layout="constrained")
+    ax.plot(ns, dqi_gap, marker="o", linewidth=1.6, label="Classic DQI normalized f-gap")
+    ax.plot(ns, rnd_gap, marker="s", linewidth=1.2, label="Random normalized f-gap")
+    ax.axhline(0.0, linestyle="--", linewidth=1.0, color="#1B5E20")
+    ax.set_xlabel("Coverage count n")
+    ax.set_ylabel("(f* - f) / max(|f*|, eps)")
+    ax.set_title("Gap-to-exact comparison (where exact available)")
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="best")
     fig.savefig(out_path, dpi=150)
 
 
@@ -197,6 +282,19 @@ def main() -> int:
             "n_vars": int(B.shape[1]),
             "n_checks": int(B.shape[0]),
             "package": int(args.package),
+            "reference_value": None if brute is None else float(brute["best_f"]),
+            "methods": {
+                "classic_dqi": {
+                    "value": None if classic.expected_f is None else float(classic.expected_f),
+                    "time_s": float(classic_runtime),
+                    "cost": int(args.shots),
+                },
+                "random_uniform": {
+                    "value": float(random_row["expected_f"]),
+                    "time_s": float(random_row["runtime_s"]),
+                    "cost": int(random_row["cost"]),
+                },
+            },
             "classic_dqi": {
                 "expected_s": classic.expected_s,
                 "expected_f": classic.expected_f,
@@ -233,9 +331,21 @@ def main() -> int:
     json_path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
     print("\nwrote:", json_path)
 
-    plot_path = out_dir / "classic_dqi_benchmark_comparison.png"
-    _plot(rows, plot_path)
-    print("wrote:", plot_path)
+    plot_main = out_dir / "classic_dqi_benchmark_comparison.png"
+    plot_runtime = out_dir / "classic_dqi_benchmark_runtime.png"
+    plot_cost = out_dir / "classic_dqi_benchmark_workflow_cost.png"
+    plot_s = out_dir / "classic_dqi_benchmark_expected_s.png"
+    plot_gap = out_dir / "classic_dqi_benchmark_gap_to_exact.png"
+    _plot_main(rows, plot_main)
+    _plot_runtime(rows, plot_runtime)
+    _plot_workflow_cost(rows, plot_cost)
+    _plot_expected_s(rows, plot_s)
+    _plot_gap(rows, plot_gap)
+    print("wrote:", plot_main)
+    print("wrote:", plot_runtime)
+    print("wrote:", plot_cost)
+    print("wrote:", plot_s)
+    print("wrote:", plot_gap)
     return 0
 
 
