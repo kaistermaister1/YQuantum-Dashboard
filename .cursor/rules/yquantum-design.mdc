@@ -1,10 +1,10 @@
 ---
-description: "|Y>Quantum 2026 UI — match challenge PDF / sponsor styling"
+description: "|Y>Quantum 2026 UI - match challenge PDF / sponsor styling"
 alwaysApply: true
 ---
 
 # YQuantum dashboard styling
 
-For any UI (web, dashboards, charts, notebooks rendered as HTML), follow **`DESIGN_SYSTEM_FOR_AGENTS.md`** at the repo root: Travelers red / Yale blue / platform blue tokens, light gray app shell, report-like tables, algorithm colors (QAOA `#0066CC`, DQI `#00356B`, classical `#2D8C3C`).
+For any UI (web, dashboards, charts, notebooks rendered as HTML), follow **`docs/DESIGN_SYSTEM_FOR_AGENTS.md`**: Travelers red, Yale blue, platform blue tokens, light gray app shell, report-like tables, and the algorithm colors QAOA `#0066CC`, DQI `#00356B`, and classical `#2D8C3C`.
 
-Do not introduce unrelated palettes or decorative “startup” styling. If the challenge materials repo is cloned locally, use `Travelers/docs/01_insurance_bundling.html` and `06_scaling.html` as reference implementations; otherwise rely on the token table and rules in the design brief.
+Do not introduce unrelated palettes or decorative "startup" styling. If the challenge materials repo is cloned locally, use `subprojects/will/Travelers/docs/01_insurance_bundling.html` and `subprojects/will/Travelers/docs/06_scaling.html` as reference implementations; otherwise rely on the token table and rules in the design brief.

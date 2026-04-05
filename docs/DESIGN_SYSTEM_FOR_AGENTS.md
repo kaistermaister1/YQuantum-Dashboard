@@ -2,15 +2,15 @@
 
 Use this file so websites, dashboards, notebooks, and internal tools **visually align** with the challenge materials, especially **`YQH26.pdf`** (Yale Quantum Hackathon 2026 / P&C bundling problem statement).
 
-**In this repo (YQuantum-Dashboard):** This file is at the project root. Paths like `Travelers/YQH26.pdf` and `Travelers/docs/*.html` point to the **official challenge materials** repository. Use a local clone of that repo for side-by-side visual reference; **tokens, layout rules, and the paste-ready prompt below are self-contained** and do not require those files to be present here.
+**In this repo (YQuantum-Dashboard):** This file lives under `docs/`. Paths like `subprojects/will/Travelers/YQH26.pdf` and `subprojects/will/Travelers/docs/*.html` point to the official challenge materials bundled in this repository.
 
 ## Canonical references (implementations to mimic)
 
-1. **Primary:** Open `Travelers/YQH26.pdf` and match **density, hierarchy, and seriousness** of a technical internal report: clear section numbering, readable tables, restrained decoration, strong typographic hierarchy, minimal “startup” styling.
-2. **Token + component reference (already in-repo):** The static pages under `Travelers/docs/` encode approved colors and patterns. Prefer copying their `:root` variables and layout idioms rather than inventing new palettes.
-   - **Document / tool UI (light):** `Travelers/docs/01_insurance_bundling.html` — header bar, grid layout, cards, family badges.
-   - **Dashboard / charts:** `Travelers/docs/06_scaling.html` — section labels, assumption boxes, chart legends.
-   - **Full-screen dark deck:** `Travelers/docs/index.html` / `00_kickoff_slides.html` — only when the product is explicitly presentation-style.
+1. **Primary:** Open `subprojects/will/Travelers/YQH26.pdf` and match **density, hierarchy, and seriousness** of a technical internal report: clear section numbering, readable tables, restrained decoration, strong typographic hierarchy, minimal "startup" styling.
+2. **Token + component reference (already in-repo):** The static pages under `subprojects/will/Travelers/docs/` encode approved colors and patterns. Prefer copying their `:root` variables and layout idioms rather than inventing new palettes.
+   - **Document / tool UI (light):** `subprojects/will/Travelers/docs/01_insurance_bundling.html` - header bar, grid layout, cards, family badges.
+   - **Dashboard / charts:** `subprojects/will/Travelers/docs/06_scaling.html` - section labels, assumption boxes, chart legends.
+   - **Full-screen dark deck:** `subprojects/will/Travelers/docs/index.html` / `00_kickoff_slides.html` - only when the product is explicitly presentation-style.
 
 **Rule of thumb:** If it is a **dashboard, app, or report viewer**, use the **light** pattern (gray background, charcoal text, red/Yale/blue accents). Reserve the **charcoal full-bleed slide** look for **presentations**.
 
@@ -18,7 +18,7 @@ Use this file so websites, dashboards, notebooks, and internal tools **visually 
 
 ## Design tokens (copy into CSS or design tools)
 
-These values are consolidated from `Travelers/docs/*.html`. Treat them as **defaults** unless sponsor materials specify otherwise.
+These values are consolidated from `subprojects/will/Travelers/docs/*.html`. Treat them as **defaults** unless sponsor materials specify otherwise.
 
 | Token | Hex | Role |
 |--------|-----|------|
@@ -118,7 +118,7 @@ Copy everything inside the block below into a project rule, agent instruction, o
 
 ```
 You are implementing UI for the |Y>Quantum 2026 hackathon (Travelers + Quantinuum + LTM).
-Visual target: match the technical internal-report aesthetic of Travelers/YQH26.pdf — clear hierarchy, compact tables, restrained color, no flashy marketing styling.
+Visual target: match the technical internal-report aesthetic of `subprojects/will/Travelers/YQH26.pdf` - clear hierarchy, compact tables, restrained color, no flashy marketing styling.
 
 Mandatory design tokens (use as CSS variables or exact hex):
 - accent red #E31837, accent dark #B8132D, platform blue #0066CC (QAOA), Yale blue #00356B (DQI), charcoal #2D2926, light gray #F5F5F5, white #FFFFFF, classical green #2D8C3C, border #dddddd.
@@ -130,11 +130,11 @@ Layout defaults for apps/dashboards (not slide decks):
 - Typography: system UI stack; section labels uppercase with letter-spacing, often in accent red.
 - Charts: QAOA=blue #0066CC, DQI=Yale #00356B, classical=green #2D8C3C when comparing methods.
 
-Before finishing, mentally diff your result against Travelers/docs/01_insurance_bundling.html and 06_scaling.html — same palette and seriousness. Do not invent a new theme.
+Before finishing, mentally diff your result against `subprojects/will/Travelers/docs/01_insurance_bundling.html` and `subprojects/will/Travelers/docs/06_scaling.html` - same palette and seriousness. Do not invent a new theme.
 ```
 
 ---
 
 ## Maintenance
 
-When sponsor PDFs or slides update, **update this file** and, in the challenge-materials repo, the `:root` blocks in `Travelers/docs/*.html`, so agents and humans stay aligned.
+When sponsor PDFs or slides update, update this file and the `:root` blocks in `subprojects/will/Travelers/docs/*.html` together so agents and humans stay aligned.

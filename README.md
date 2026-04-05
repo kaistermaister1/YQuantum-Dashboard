@@ -1,6 +1,24 @@
-# YQuantum-Dashboard
+# YQuantum Dashboard
 
-- **`QGarsDashboard/`** — Next.js app (run `npm install` and `npm run dev` inside that directory).
-- **`Travelers/`** — Full **hackathon challenge** materials (docs, notebooks, `code_examples`, `qubo_vis`, LTM data layout under `docs/data/`). This is the **shared QGars copy** on GitHub; use a venv under `Travelers/code_examples/`.
-- **`bundle_qubo/`** — Slim duplicate of the Python + `qubo_vis` slice for quick reference; prefer **`Travelers/`** as source of truth when both exist.
-- **`DESIGN_SYSTEM_FOR_AGENTS.md`** — shared styling brief for dashboards and tools.
+This repository is organized for a root-level Vercel deployment.
+
+- Dashboard app: root-level Next.js project in `app/`, `components/`, `lib/`, and `public/`
+- Subprojects: `subprojects/` contains member-owned work
+- Docs: `docs/` contains the design brief and dashboard notes
+
+## Subprojects
+
+- `subprojects/will/Travelers/` is the primary challenge-materials and data workspace
+- `subprojects/will/bundle_qubo/` is the smaller QUBO-focused companion workspace
+- `subprojects/kai/` holds Kai's files
+- `subprojects/cayman/` holds Cayman's files
+- `subprojects/peyton/` holds Peyton's files
+
+## Local Development
+
+```bash
+npm install
+npm run dev
+```
+
+The dashboard reads YQH26 data from `subprojects/will/Travelers/docs/data/YQH26_data`.
