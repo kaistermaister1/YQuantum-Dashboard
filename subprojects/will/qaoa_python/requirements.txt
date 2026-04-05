@@ -1,0 +1,6 @@
+# QAOA package + CLI/scripts (aligns with Travelers/code_examples)
+numpy>=1.24
+pulp>=2.8
+guppylang>=0.21
+matplotlib>=3.7
+scipy>=1.10
