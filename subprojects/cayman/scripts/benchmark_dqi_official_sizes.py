@@ -3,7 +3,7 @@
 
 Each size ``n`` is the number of **coverages** subsampled from the LTM instance; the QUBO is
 built with ``qubo_block.build_qubo_block_for_package`` (so the matrix dimension is
-``n_coverage + n_slack`` for that block, usually ≥ ``n``).
+``n_coverage + n_slack`` for that block, usually >= ``n``).
 
 Requires ``--data-dir`` pointing at LTM ``instance_*.csv`` files.
 
@@ -75,8 +75,8 @@ def build_block_for_coverage_count(
     package_index: int,
     penalty_weight: float | None,
     subsample_packages: int,
-) -> QuboBlock:
-    """Load LTM data, subsample to ``n_coverages`` (capped by dataset), build one package QUBO block."""
+) -> tuple[QuboBlock, object]:
+    """Load LTM data, subsample, return ``(package_block, subsampled_problem)``."""
     problem = load_ltm_instance(data_dir)
     n_cov = min(int(n_coverages), int(problem.N))
     if n_cov < 1:
@@ -86,11 +86,12 @@ def build_block_for_coverage_count(
     small = subsample_problem(problem, n_cov, n_pkg)
     if package_index < 0 or package_index >= small.M:
         raise ValueError(f"package_index {package_index} out of range for subsampled M={small.M}")
-    return build_qubo_block_for_package(
+    block = build_qubo_block_for_package(
         small,
         package_index=int(package_index),
         penalty_weight=penalty_weight,
     )
+    return block, small
 
 
 def parse_args() -> argparse.Namespace:
@@ -109,7 +110,7 @@ def parse_args() -> argparse.Namespace:
         "--penalty-weight",
         type=float,
         default=None,
-        help="QUBO penalty λ (default: qubo_block.default_penalty_weight)",
+        help="QUBO penalty lambda (default: qubo_block.default_penalty_weight)",
     )
     ap.add_argument(
         "--subsample-packages",
@@ -126,7 +127,7 @@ def parse_args() -> argparse.Namespace:
     )
     ap.add_argument("--skip-ns", type=int, nargs="*", default=[], help="Sizes to skip")
     ap.add_argument("--quick", action="store_true", help="Only n=10 and n=20")
-    ap.add_argument("--p", type=int, default=None, help="DQI layers (default: 2 if n≤21 else 1)")
+    ap.add_argument("--p", type=int, default=None, help="DQI layers (default: 2 if n<=21 else 1)")
     ap.add_argument("--shots", type=int, default=512, help="DQI shots; random baseline matches this budget")
     ap.add_argument("--dqi-seed", type=int, default=7)
     ap.add_argument("--random-seed", type=int, default=12)
@@ -136,11 +137,20 @@ def parse_args() -> argparse.Namespace:
         default="nexus-selene",
         help="Default nexus-selene; use local/selene for on-machine Selene (see dqi_backends).",
     )
-    ap.add_argument("--max-qubits", type=int, default=256, help="Must be ≥ largest n")
+    ap.add_argument("--max-qubits", type=int, default=256, help="Must be >= largest n")
     ap.add_argument("--mixer", choices=["h", "rx"], default="h")
     ap.add_argument("--statistic", choices=["mean", "best"], default="mean")
+    ap.add_argument(
+        "--dicke-k",
+        type=int,
+        default=None,
+        help=(
+            "Coverage-register Dicke Hamming weight for DQI parity mode. "
+            "Default: min(K, n_coverages_in_row)."
+        ),
+    )
     ap.add_argument("--out-dir", type=Path, default=None, help="Default: cayman/artifacts/benchmark_official")
-    ap.add_argument("--include-qaoa", action="store_true", help="QAOA baseline for n≤50 only")
+    ap.add_argument("--include-qaoa", action="store_true", help="QAOA baseline for n<=50 only")
     ap.add_argument(
         "--local-search-restarts",
         type=int,
@@ -150,7 +160,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument(
         "--classical-only",
         action="store_true",
-        help="Do not run Guppy/Selene; only random + multistart 1-opt (+ brute if n≤22).",
+        help="Do not run Guppy/Selene; only random + multistart 1-opt (+ brute if n<=22).",
     )
     ap.add_argument(
         "--nexus-no-timeout",
@@ -275,7 +285,7 @@ def main() -> int:
         ("random", "local_search") if classical_only else ("dqi", "random", "local_search")
     )
     plot_title = (
-        "Official sizes — classical baselines only"
+        "Official sizes - classical baselines only"
         if classical_only
         else "Official sizes benchmark"
     )
@@ -287,7 +297,7 @@ def main() -> int:
 
     for n in ns:
         p = int(args.p) if args.p is not None else (2 if n <= 21 else 1)
-        block = build_block_for_coverage_count(
+        block, small_problem = build_block_for_coverage_count(
             data_dir,
             n,
             package_index=int(args.package),
@@ -345,6 +355,12 @@ def main() -> int:
                     nexus_job_name=f"{args.nexus_job_name}-cov{n}-p{args.package}",
                     nexus_helios_system=str(args.nexus_helios_system),
                     nexus_timeout=nexus_timeout,
+                    insurance_parity=(small_problem, int(args.package)),
+                    dicke_k=(
+                        int(args.dicke_k)
+                        if args.dicke_k is not None
+                        else int(min(small_problem.max_options_per_package, small_problem.N))
+                    ),
                 )
             except TimeoutError:
                 print(

@@ -7,6 +7,7 @@ import math
 import os
 import sys
 import tempfile
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -19,6 +20,8 @@ from src.dqi_backends import (
     run_kernel_local,
     run_kernel_nexus,
 )
+from src.dqi_dicke_prep import append_dicke_state_lines
+from src.dqi_insurance_parity import postselect_bitstring_counts
 
 
 def import_guppylang_with_workaround() -> None:
@@ -163,6 +166,11 @@ class DqiSampleStats:
     best_bitstring: str
     best_value: float
     constant_offset: float
+    post_selection_rate: float | None = None
+    """Fraction of shots kept after XOR syndrome filtering (``None`` if not used)."""
+
+    raw_bitstring_counts: dict[str, int] | None = None
+    """Full measurement histogram before syndrome post-selection (keys length ``n_logical + n_syndrome``)."""
 
 
 def _angle_literal(phi_radians: float) -> str:
@@ -234,6 +242,71 @@ def _build_dqi_source(
     return "\n".join(lines) + "\n"
 
 
+def _build_dqi_dicke_parity_source(
+    n_prob: int,
+    n_coverage: int,
+    c_z: np.ndarray,
+    zz: list[tuple[int, int, float]],
+    gammas: list[float],
+    betas: list[float],
+    mixer: str,
+    B: np.ndarray,
+    *,
+    dicke_k: int | None,
+) -> str:
+    """Dicke (optional) + slack ``H`` + XOR syndromes + QUBO phase/mixer + final H interference."""
+    if len(gammas) != len(betas):
+        raise ValueError("gammas and betas must have the same length")
+    n_syn = int(B.shape[0])
+    if int(B.shape[1]) != n_prob:
+        raise ValueError("B columns must equal n_prob (QUBO dimension)")
+    n_total = n_prob + n_syn
+
+    lines: list[str] = [
+        "from guppylang import guppy",
+        "from guppylang.std.angles import angle",
+        "from guppylang.std.builtins import result",
+        "from guppylang.std.quantum import cx, h, measure, qubit, rx, rz, ry, x",
+        "",
+        "@guppy",
+        "def dqi_kernel() -> None:",
+    ]
+    for i in range(n_total):
+        lines.append(f"    q{i} = qubit()")
+
+    if dicke_k is not None:
+        if n_coverage < 1:
+            raise ValueError("n_coverage >= 1 required when dicke_k is set")
+        if not (0 <= dicke_k <= n_coverage):
+            raise ValueError(f"dicke_k must be in [0, n_coverage], got {dicke_k}, n_coverage={n_coverage}")
+        q_map = list(range(n_coverage))
+        append_dicke_state_lines(lines, q_map, int(dicke_k), _angle_literal)
+        for j in range(n_coverage, n_prob):
+            lines.append(f"    h(q{j})")
+    else:
+        for i in range(n_prob):
+            lines.append(f"    h(q{i})")
+
+    Bb = np.asarray(B, dtype=np.uint8) & 1
+    for r in range(n_syn):
+        sidx = n_prob + r
+        for j in range(n_prob):
+            if int(Bb[r, j]) != 0:
+                lines.append(f"    cx(q{j}, q{sidx})")
+
+    for g, b in zip(gammas, betas):
+        _append_cost_layer(lines, n_prob, c_z, zz, gamma=float(g))
+        _append_mixer_layer(lines, n_prob, beta=float(b), mixer=mixer)
+
+    # Explicit interference stage after parity encoding / phase evolution.
+    for i in range(n_prob):
+        lines.append(f"    h(q{i})")
+
+    for i in range(n_total):
+        lines.append(f'    result("m{i}", measure(q{i}))')
+    return "\n".join(lines) + "\n"
+
+
 def sample_dqi(
     Q: np.ndarray,
     gammas: list[float],
@@ -250,26 +323,71 @@ def sample_dqi(
     nexus_helios_system: str = "Helios-1",
     nexus_timeout: float | None = 300.0,
     eval_tag: str = "",
+    B: np.ndarray | None = None,
+    parity_rhs: np.ndarray | None = None,
+    dicke_k: int | None = None,
+    n_coverage: int | None = None,
 ) -> DqiSampleStats:
     """Run a DQI circuit with fixed parameters and return sampled statistics.
 
     ``execution``: ``nexus_selene`` (default), ``nexus_helios``, or ``local`` / ``selene``.
     For parallel jobs, use distinct HUGR/job names or ``eval_tag``.
+
+    If ``B`` and ``parity_rhs`` are set (GF(2) parity-check matrix and RHS), the kernel
+    allocates syndrome qubits, XORs parity into them, and post-selects shots whose
+    syndrome bitstring equals ``parity_rhs``.  Optional ``dicke_k`` with ``n_coverage``
+    prepares a Dicke state on the first ``n_coverage`` problem qubits (Bärtschi–Eidenbenz).
     """
     import_guppylang_with_workaround()
 
     q = np.asarray(Q, dtype=float)
     q = (q + q.T) * 0.5
-    n = q.shape[0]
+    n_prob = q.shape[0]
     if q.shape[0] != q.shape[1]:
         raise ValueError("Q must be square")
-    if n > int(max_qubits):
-        raise ValueError(f"n_qubits={n} exceeds max_qubits={max_qubits}")
     if len(gammas) < 1 or len(betas) < 1:
         raise ValueError("At least one layer is required")
 
+    use_parity = B is not None
+    if use_parity:
+        if parity_rhs is None:
+            raise ValueError("parity_rhs is required when B is set")
+        Bm = np.asarray(B, dtype=np.uint8) & 1
+        rhs = np.asarray(parity_rhs, dtype=np.uint8) & 1
+        if Bm.shape[0] != rhs.shape[0]:
+            raise ValueError("parity_rhs length must match number of parity rows")
+        n_syn = int(Bm.shape[0])
+        n_total = n_prob + n_syn
+    else:
+        Bm = None
+        rhs = None
+        n_syn = 0
+        n_total = n_prob
+
+    if dicke_k is not None and n_coverage is None:
+        raise ValueError("n_coverage is required when dicke_k is set")
+    if n_coverage is not None and (n_coverage < 0 or n_coverage > n_prob):
+        raise ValueError("n_coverage must be in [0, n_prob]")
+
+    if n_total > int(max_qubits):
+        raise ValueError(f"n_qubits={n_total} exceeds max_qubits={max_qubits}")
+
     _, c_z, zz = qubo_to_ising(q)
-    src = _build_dqi_source(n, c_z, zz, list(gammas), list(betas), mixer=mixer)
+    if use_parity:
+        assert Bm is not None
+        src = _build_dqi_dicke_parity_source(
+            n_prob,
+            int(n_coverage) if n_coverage is not None else n_prob,
+            c_z,
+            zz,
+            list(gammas),
+            list(betas),
+            mixer,
+            Bm,
+            dicke_k=dicke_k,
+        )
+    else:
+        src = _build_dqi_source(n_prob, c_z, zz, list(gammas), list(betas), mixer=mixer)
 
     fd, path = tempfile.mkstemp(suffix="_dqi_guppy.py", text=True)
     try:
@@ -289,12 +407,12 @@ def sample_dqi(
         job_name = f"{nexus_job_name}-{tag}" if tag else nexus_job_name
 
         if backend == "local":
-            res = run_kernel_local(kernel, n, int(shots), int(seed))
-            bitstring_counts = bitstring_counts_from_shots(res.results, n)
+            res = run_kernel_local(kernel, n_total, int(shots), int(seed))
+            raw_counts = bitstring_counts_from_shots(res.results, n_total)
         elif backend == "nexus_selene":
-            bitstring_counts = run_kernel_nexus(
+            raw_counts = run_kernel_nexus(
                 kernel,
-                n,
+                n_total,
                 int(shots),
                 mode="selene",
                 hugr_name=hugr_name,
@@ -303,9 +421,9 @@ def sample_dqi(
                 timeout=nexus_timeout,
             )
         else:
-            bitstring_counts = run_kernel_nexus(
+            raw_counts = run_kernel_nexus(
                 kernel,
-                n,
+                n_total,
                 int(shots),
                 mode="helios",
                 hugr_name=hugr_name,
@@ -313,6 +431,22 @@ def sample_dqi(
                 helios_system_name=nexus_helios_system,
                 timeout=nexus_timeout,
             )
+
+        raw_snapshot = dict(raw_counts)
+        post_rate: float | None = None
+        if use_parity and Bm is not None and rhs is not None:
+            bitstring_counts, post_rate = postselect_bitstring_counts(
+                raw_snapshot, Bm, rhs, n_prob=n_prob
+            )
+            if not bitstring_counts:
+                agg: Counter[str] = Counter()
+                for s, c in raw_snapshot.items():
+                    if len(s) >= n_prob:
+                        agg[s[:n_prob]] += int(c)
+                bitstring_counts = dict(agg)
+                post_rate = 0.0
+        else:
+            bitstring_counts = raw_snapshot
 
         best_s: str | None = None
         best_val = float("inf")
@@ -325,7 +459,7 @@ def sample_dqi(
         assert best_s is not None
 
         return DqiSampleStats(
-            n_qubits=n,
+            n_qubits=n_prob,
             p=len(gammas),
             shots=int(shots),
             gammas=[float(v) for v in gammas],
@@ -334,6 +468,8 @@ def sample_dqi(
             best_bitstring=best_s,
             best_value=float(best_val),
             constant_offset=float(constant_offset),
+            post_selection_rate=post_rate,
+            raw_bitstring_counts=raw_snapshot if use_parity else None,
         )
     finally:
         try:

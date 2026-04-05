@@ -1,4 +1,9 @@
-"""Single-shot DQI: one circuit execution; no classical angle optimization loop."""
+"""Single-shot DQI: one circuit execution; no classical angle optimization loop.
+
+Default mode is fixed-angle QUBO/Ising phase plus mixer (QAOA-shaped).  Optional ``B`` /
+``parity_rhs`` enable XOR syndrome qubits and post-selection; optional ``dicke_k`` /
+``n_coverage`` prepare a Dicke state on coverage bits (Bärtschi–Eidenbenz schedule).
+"""
 
 from __future__ import annotations
 
@@ -74,6 +79,10 @@ def run_dqi_oneshot(
     nexus_job_name: str = "dqi-execute",
     nexus_helios_system: str = "Helios-1",
     nexus_timeout: float | None = 300.0,
+    B: np.ndarray | None = None,
+    parity_rhs: np.ndarray | None = None,
+    dicke_k: int | None = None,
+    n_coverage: int | None = None,
 ) -> DqiRunResult:
     """Run DQI once with fixed angles (interference from cost phases + mixer, default Hadamard).
 
@@ -111,6 +120,10 @@ def run_dqi_oneshot(
         nexus_helios_system=nexus_helios_system,
         nexus_timeout=nexus_timeout,
         eval_tag="",
+        B=B,
+        parity_rhs=parity_rhs,
+        dicke_k=dicke_k,
+        n_coverage=n_coverage,
     )
     obj = _objective(q, stats, statistic=statistic, constant_offset=constant_offset)
     return DqiRunResult(

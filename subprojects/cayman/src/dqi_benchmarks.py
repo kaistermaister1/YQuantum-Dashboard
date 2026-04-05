@@ -154,6 +154,8 @@ def benchmark_dqi_pipeline(
     nexus_job_name: str = "dqi-execute",
     nexus_helios_system: str = "Helios-1",
     nexus_timeout: float | None = 300.0,
+    insurance_parity: tuple[Any, int] | None = None,
+    dicke_k: int | None = None,
     progress_callback: Callable[[dict[str, BenchmarkResult]], None] | None = None,
 ) -> dict[str, BenchmarkResult]:
     """Run DQI + baselines and return comparable metrics.
@@ -188,6 +190,8 @@ def benchmark_dqi_pipeline(
         nexus_job_name=nexus_job_name,
         nexus_helios_system=nexus_helios_system,
         nexus_timeout=nexus_timeout,
+        insurance_parity=insurance_parity,
+        dicke_k=dicke_k,
     )
     dqi_runtime = time.perf_counter() - t0
     results["dqi"] = BenchmarkResult(
@@ -202,6 +206,7 @@ def benchmark_dqi_pipeline(
             "n_energy_evaluations": int(shots),
             "bitstring": dqi_meta.bitstring,
             "bitstring_counts": dqi_meta.run_result.stats_at_best.bitstring_counts,
+            "post_selection_rate": dqi_meta.run_result.stats_at_best.post_selection_rate,
         },
     )
     _notify()
