@@ -65,7 +65,8 @@ def run_kernel_nexus(
 
     kernel.check()
     pkg = kernel.compile()
-    ref = qnexus.hugr.upload(pkg, name=hugr_name)
+    dqi_test_project = qnexus.projects.get_or_create(name="dqi-test")
+    ref = qnexus.hugr.upload(pkg, name=hugr_name,project=dqi_test_project)
     cfg = (
         HeliosConfig(system_name=helios_system_name)
         if mode == "helios"
@@ -78,6 +79,7 @@ def run_kernel_nexus(
         name=job_name,
         n_qubits=[int(n)],
         timeout=timeout,
+        project=dqi_test_project,
     )
     raw = results[0]
     if not isinstance(raw, QsysResult):
