@@ -1,0 +1,13 @@
+# Cayman DQI / QAOA stack
+#   pip install -r requirements.txt
+#
+# Windows: if pip reports WinError 32 during guppylang install, pause OneDrive sync on this
+# folder or close other Python/IDE processes using .venv, then retry.
+# On Windows ARM64, use 64-bit (x86-64) Python from python.org if wasmtime fails to load.
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7
+guppylang
+
+# Optional: Nexus cloud execution
+# qnexus

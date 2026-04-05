@@ -1,0 +1,197 @@
+"""Benchmark helpers for DQI, random search, brute force, and optional QAOA baseline."""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+
+from src.dqi_core import bitstring_to_array, qubo_energy
+from src.run_dqi import run_dqi_with_details
+
+
+@dataclass
+class BenchmarkResult:
+    method: str
+    best_solution: np.ndarray
+    best_value: float
+    runtime_sec: float
+    approximation_ratio: float | None
+    extra: dict[str, Any]
+
+
+def brute_force_qubo(
+    Q: np.ndarray,
+    *,
+    constant_offset: float = 0.0,
+    max_n: int = 22,
+) -> tuple[np.ndarray, float]:
+    """Exact minimization for small QUBOs."""
+    q = np.asarray(Q, dtype=float)
+    n = q.shape[0]
+    if n > max_n:
+        raise ValueError(f"Brute force disabled for n={n} > max_n={max_n}")
+    best_val = float("inf")
+    best = np.zeros(n, dtype=float)
+    for k in range(1 << n):
+        x = np.array([float((k >> i) & 1) for i in range(n)], dtype=float)
+        v = qubo_energy(x, q, constant_offset=constant_offset)
+        if v < best_val:
+            best_val = float(v)
+            best = x.copy()
+    return best, float(best_val)
+
+
+def random_sampling_baseline(
+    Q: np.ndarray,
+    *,
+    n_samples: int = 4096,
+    rng_seed: int = 0,
+    constant_offset: float = 0.0,
+) -> tuple[np.ndarray, float]:
+    """Classical random bitstring baseline."""
+    q = np.asarray(Q, dtype=float)
+    n = q.shape[0]
+    rng = np.random.default_rng(int(rng_seed))
+    best_val = float("inf")
+    best = np.zeros(n, dtype=float)
+    for _ in range(int(n_samples)):
+        x = rng.integers(0, 2, size=n).astype(float)
+        v = qubo_energy(x, q, constant_offset=constant_offset)
+        if v < best_val:
+            best_val = float(v)
+            best = x.copy()
+    return best, float(best_val)
+
+
+def _approx_ratio(best_val: float, ref_val: float) -> float | None:
+    # For minimization: ratio 1 means optimal (or reference-equal), >1 worse.
+    denom = abs(ref_val)
+    if denom < 1e-12:
+        return None
+    return float(best_val / ref_val)
+
+
+def benchmark_dqi_pipeline(
+    Q_or_block: Any,
+    *,
+    p: int = 1,
+    optimizer: str = "cobyla",
+    shots: int = 512,
+    dqi_seed: int = 0,
+    random_seed: int = 1,
+    brute_force_max_n: int = 22,
+    random_samples: int = 4096,
+    include_qaoa_baseline: bool = True,
+) -> dict[str, BenchmarkResult]:
+    """Run DQI + baselines and return comparable metrics."""
+    q = np.asarray(getattr(Q_or_block, "Q", Q_or_block), dtype=float)
+    const = float(getattr(Q_or_block, "constant_offset", 0.0))
+
+    results: dict[str, BenchmarkResult] = {}
+
+    t0 = time.perf_counter()
+    dqi_x, dqi_val, dqi_meta = run_dqi_with_details(
+        Q_or_block,
+        p=p,
+        optimizer=optimizer,
+        shots=shots,
+        seed=dqi_seed,
+    )
+    dqi_runtime = time.perf_counter() - t0
+    results["dqi"] = BenchmarkResult(
+        method="dqi",
+        best_solution=dqi_x,
+        best_value=float(dqi_val),
+        runtime_sec=float(dqi_runtime),
+        approximation_ratio=None,
+        extra={
+            "history": dqi_meta.optimizer_result.history,
+            "n_evaluations": dqi_meta.optimizer_result.n_evaluations,
+            "bitstring": dqi_meta.bitstring,
+        },
+    )
+
+    t1 = time.perf_counter()
+    rnd_x, rnd_val = random_sampling_baseline(
+        q,
+        n_samples=random_samples,
+        rng_seed=random_seed,
+        constant_offset=const,
+    )
+    rnd_runtime = time.perf_counter() - t1
+    results["random"] = BenchmarkResult(
+        method="random",
+        best_solution=rnd_x,
+        best_value=float(rnd_val),
+        runtime_sec=float(rnd_runtime),
+        approximation_ratio=None,
+        extra={"n_samples": int(random_samples)},
+    )
+
+    brute_val: float | None = None
+    try:
+        t2 = time.perf_counter()
+        bf_x, bf_val = brute_force_qubo(q, constant_offset=const, max_n=brute_force_max_n)
+        bf_runtime = time.perf_counter() - t2
+        brute_val = float(bf_val)
+        results["bruteforce"] = BenchmarkResult(
+            method="bruteforce",
+            best_solution=bf_x,
+            best_value=float(bf_val),
+            runtime_sec=float(bf_runtime),
+            approximation_ratio=1.0,
+            extra={"max_n": int(brute_force_max_n)},
+        )
+    except ValueError:
+        pass
+
+    if include_qaoa_baseline:
+        try:
+            from src.qubo_qaoa_optimize import optimize_qaoa_p1_random
+            from src.qubo_block import QuboBlock
+
+            q_block = QuboBlock(
+                package_index=0,
+                Q=q,
+                n_coverage=q.shape[0],
+                n_slack=0,
+                coverage_offset=0,
+                penalty_weight=1.0,
+                constant_offset=const,
+            )
+            t3 = time.perf_counter()
+            qaoa_res = optimize_qaoa_p1_random(
+                q_block,
+                n_samples=24,
+                shots=max(256, shots // 2),
+                rng_seed=dqi_seed + 99,
+                seed_offset=dqi_seed + 1000,
+                statistic="mean",
+                max_qubits=50,
+            )
+            qaoa_runtime = time.perf_counter() - t3
+            qaoa_bits = qaoa_res.stats_at_best.best_bitstring
+            qaoa_x = bitstring_to_array(qaoa_bits)
+            qaoa_val = float(qaoa_res.stats_at_best.best_qubo_energy)
+            results["qaoa"] = BenchmarkResult(
+                method="qaoa",
+                best_solution=qaoa_x,
+                best_value=qaoa_val,
+                runtime_sec=float(qaoa_runtime),
+                approximation_ratio=None,
+                extra={"best_bitstring": qaoa_bits, "n_evaluations": qaoa_res.n_evaluations},
+            )
+        except Exception:
+            # Baseline is optional.
+            pass
+
+    if brute_val is not None:
+        for key, val in results.items():
+            if key == "bruteforce":
+                continue
+            val.approximation_ratio = _approx_ratio(val.best_value, brute_val)
+
+    return results
