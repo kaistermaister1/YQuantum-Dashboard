@@ -1,0 +1,11 @@
+coverage_index,coverage_name,Young Driver Budget,Young Family Starter,Suburban Homeowner
+0,auto_liability_basic,0,1,0
+1,auto_liability_enhanced,1,0,1
+2,homeowners,0,0,0
+3,condo_owners,0,0,1
+4,renters,1,1,0
+5,collision,1,1,0
+6,comprehensive,0,0,0
+7,medical_payments,1,0,0
+8,personal_injury_protection,0,0,1
+9,uninsured_motorist,1,1,0

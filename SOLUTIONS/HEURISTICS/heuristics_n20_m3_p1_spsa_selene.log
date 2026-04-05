@@ -1,0 +1,39 @@
+Already logged in. Tokens are valid.
+[package 1] Starting Selene SPSA on 39 qubits (20 coverage + 19 slack), shots=256, maxiter=40
+Traceback (most recent call last):
+  File "/Users/willott/School/RESEARCH/YQuantum/SOLUTIONS/heuristics.py", line 531, in <module>
+    main()
+    ~~~~^^
+  File "/Users/willott/School/RESEARCH/YQuantum/SOLUTIONS/heuristics.py", line 517, in main
+    return _run_qaoa(
+        n=args.n,
+    ...<7 lines>...
+        solutions_dir=SOLUTIONS_DIR,
+    )
+  File "/Users/willott/School/RESEARCH/YQuantum/SOLUTIONS/heuristics.py", line 397, in _run_qaoa
+    result = qaoa_selene.optimize_block_selene(
+        session=session,
+    ...<4 lines>...
+        evaluation_callback=on_evaluation,
+    )
+  File "/Users/willott/School/RESEARCH/YQuantum/SOLUTIONS/qaoa_selene.py", line 387, in optimize_block_selene
+    return optimize_block_spsa_selene(
+        session=session,
+    ...<4 lines>...
+        evaluation_callback=evaluation_callback,
+    )
+  File "/Users/willott/School/RESEARCH/YQuantum/SOLUTIONS/qaoa_selene.py", line 292, in optimize_block_spsa_selene
+    stats_plus, stats_minus = _run_sources_on_selene(
+                              ~~~~~~~~~~~~~~~~~~~~~~^
+        session=session,
+        ^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+        job_label=f"Selene SPSA step {step + 1}",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/willott/School/RESEARCH/YQuantum/SOLUTIONS/qaoa_selene.py", line 111, in _run_sources_on_selene
+    raise ValueError(
+    ...<3 lines>...
+    )
+ValueError: Block uses 39 qubits; Nexus Selene statevector allows at most 26 per program. Use heuristics --target local for larger blocks, or reduce --n.

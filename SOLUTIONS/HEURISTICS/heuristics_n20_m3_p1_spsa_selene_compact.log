@@ -1,0 +1,4 @@
+Already logged in. Tokens are valid.
+[package 1] Starting Selene SPSA on 23 qubits (20 coverage + 3 slack), shots=256, maxiter=40
+[package 1] eval 1: mean_energy=32090.844153, best_mean=32090.844153, best_sample=-390.554363, elapsed=282.99s (Selene SPSA step 1 (+, batched) new best)
+[package 1] eval 2: mean_energy=30546.910517, best_mean=30546.910517, best_sample=543.833373, elapsed=282.99s (Selene SPSA step 1 (-, batched) new best)

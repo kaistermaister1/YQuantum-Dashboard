@@ -1,0 +1,11 @@
+coverage_index,coverage_name,Young Driver Budget
+0,auto_liability_basic,0
+1,auto_liability_enhanced,1
+2,homeowners,0
+3,condo_owners,1
+4,renters,0
+5,collision,1
+6,comprehensive,1
+7,medical_payments,1
+8,personal_injury_protection,0
+9,uninsured_motorist,0

@@ -323,6 +323,7 @@ def sample_dqi(
     nexus_job_name: str = "dqi-execute",
     nexus_helios_system: str = "Helios-1",
     nexus_timeout: float | None = 300.0,
+    nexus_max_cost: float | None = None,
     eval_tag: str = "",
     B: np.ndarray | None = None,
     parity_rhs: np.ndarray | None = None,
@@ -470,6 +471,7 @@ def sample_dqi(
                 job_name=job_name,
                 helios_system_name=nexus_helios_system,
                 timeout=nexus_timeout,
+                max_cost=nexus_max_cost,
             )
         else:
             raw_counts = run_kernel_nexus(
@@ -481,6 +483,7 @@ def sample_dqi(
                 job_name=job_name,
                 helios_system_name=nexus_helios_system,
                 timeout=nexus_timeout,
+                max_cost=nexus_max_cost,
             )
 
         raw_snapshot = dict(raw_counts)

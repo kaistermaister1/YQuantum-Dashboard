@@ -84,6 +84,12 @@ def _parse_args() -> argparse.Namespace:
         default=300.0,
         help="Seconds to wait for each Nexus job (ignored if --nexus-no-timeout).",
     )
+    ap.add_argument(
+        "--nexus-max-cost",
+        type=float,
+        default=None,
+        help="Optional Nexus max_cost (required by some Helios systems).",
+    )
 
     ap.add_argument(
         "--insurance-parity",
@@ -154,6 +160,7 @@ def main() -> int:
         nexus_job_name=args.nexus_job_name,
         nexus_helios_system=args.nexus_helios_system,
         nexus_timeout=nexus_timeout,
+        nexus_max_cost=args.nexus_max_cost,
         insurance_parity=ins_par,
         dicke_k=args.dicke_k,
         use_bp_decoder=bool(args.bp_decoder),

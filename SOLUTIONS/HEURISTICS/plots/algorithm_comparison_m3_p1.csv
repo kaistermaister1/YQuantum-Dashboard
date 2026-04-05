@@ -1,4 +1,4 @@
 Metric,Classical,QAOA_SPSA,QAOA_COBYLA,DQI
-Optimal price / margin (CSV: best_profit),"1,196.67","1,177.21",667.41,N/A
-Runtime (s),0.0478,359.1,144.6,N/A
-Cost (shots) (CSV: num_samples_total),—,"61,440","21,504",N/A
+Optimal price / margin (CSV: best_profit),"1,551.73",789.22,N/A,N/A
+Runtime (s),0.0449,150.0,N/A,N/A
+Cost (shots) (CSV: num_samples_total),—,"9,216",N/A,N/A

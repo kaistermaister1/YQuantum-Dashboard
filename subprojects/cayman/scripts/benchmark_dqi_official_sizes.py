@@ -180,6 +180,12 @@ def parse_args() -> argparse.Namespace:
         help="Seconds to wait per DQI Nexus job (default 1800; use --nexus-no-timeout for no cap).",
     )
     ap.add_argument(
+        "--nexus-max-cost",
+        type=float,
+        default=None,
+        help="Optional Nexus max_cost (required by some Helios systems).",
+    )
+    ap.add_argument(
         "--nexus-hugr-name",
         default="dqi-hugr",
         help="HUGR package name prefix on Nexus (same as run_dqi_cli).",
@@ -363,6 +369,7 @@ def main() -> int:
                     nexus_job_name=f"{args.nexus_job_name}-cov{n}-p{args.package}",
                     nexus_helios_system=str(args.nexus_helios_system),
                     nexus_timeout=nexus_timeout,
+                    nexus_max_cost=args.nexus_max_cost,
                     insurance_parity=(small_problem, int(args.package)),
                     dicke_k=(
                         int(args.dicke_k)
