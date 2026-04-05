@@ -6,8 +6,24 @@
 // Future: UI buttons advance steps; each step loads or morphs fields (M, C, weights, penalties,
 // full Q, block split, Hamiltonian / Ising view, QAOA circuit or bitstring output).
 
+// Raylib’s raymath uses `{ 0 }` on nested structs; that trips -Wextra in our TU. Suppress only around headers.
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-field-initializers"
+#pragma clang diagnostic ignored "-Wmissing-braces"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#pragma GCC diagnostic ignored "-Wmissing-braces"
+#endif
 #include <raylib.h>
 #include <raymath.h>
+#include <rlgl.h>
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 #include <algorithm>
 #include <cstdint>
@@ -266,6 +282,61 @@ static double MaxAbsQSubmatrix(const QuboSurface& s, int bi, int bj, int qn) {
     return m;
 }
 
+static bool SurfHasAssignment(const QuboSurface& s) {
+    return s.x.size() == static_cast<size_t>(s.n);
+}
+
+/** True if every variable index that appears in the qn×qn block (rows bi+*, cols bj+*) is selected (x=1). */
+static bool QBlockVarsAllOne(const QuboSurface& s, int bi, int bj, int qn) {
+    if (!SurfHasAssignment(s)) {
+        return false;
+    }
+    for (int i = 0; i < qn; i++) {
+        const int gi = bi + i;
+        if (gi < 0 || gi >= s.n || !s.x[static_cast<size_t>(gi)]) {
+            return false;
+        }
+    }
+    for (int j = 0; j < qn; j++) {
+        const int gj = bj + j;
+        if (gj < 0 || gj >= s.n || !s.x[static_cast<size_t>(gj)]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Max |Q_ij x_i x_j| on the block for mesh scaling during the Hamiltonian morph.
+ * If ``useAlternatingDemoBits``, uses x_i=(gi mod 2) so terms vary when real x is missing or all-1 (otherwise
+ * Q_ij·x_i·x_j == Q_ij and the height morph is invisible).
+ */
+static double MaxAbsQEnergyTermSubmatrixForMorph(const QuboSurface& s, int bi, int bj, int qn,
+                                                 bool useAlternatingDemoBits) {
+    double m = 0.0;
+    for (int ii = 0; ii < qn; ii++) {
+        for (int jj = 0; jj < qn; jj++) {
+            const int gi = bi + ii;
+            const int gj = bj + jj;
+            if (gi < 0 || gj < 0 || gi >= s.n || gj >= s.n) {
+                continue;
+            }
+            double xi;
+            double xj;
+            if (useAlternatingDemoBits) {
+                xi = static_cast<double>(gi & 1);
+                xj = static_cast<double>(gj & 1);
+            } else {
+                xi = static_cast<double>(s.x[static_cast<size_t>(gi)]);
+                xj = static_cast<double>(s.x[static_cast<size_t>(gj)]);
+            }
+            const double t = s.qAt(gi, gj) * xi * xj;
+            m = std::max(m, std::abs(t));
+        }
+    }
+    return m;
+}
+
 /** One extracted square block from the loaded Q (for a smaller 3D demo mesh). */
 static constexpr int kQDemoBlockN = 13;
 
@@ -290,32 +361,8 @@ static void ComputeDemoQBlock(const QuboSurface& surf, int* outBaseI, int* outBa
     *outQn = qn;
 }
 
-static double EnergySubBlock(const QuboSurface& s, int bi, int bj, int qn) {
-    if (s.x.size() != static_cast<size_t>(s.n)) {
-        return 0.0;
-    }
-    double e = 0.0;
-    for (int i = 0; i < qn; i++) {
-        for (int j = 0; j < qn; j++) {
-            const int gi = bi + i;
-            const int gj = bj + j;
-            e += s.qAt(gi, gj) * static_cast<double>(s.x[static_cast<size_t>(gi)]) *
-                 static_cast<double>(s.x[static_cast<size_t>(gj)]);
-        }
-    }
-    return e;
-}
-
-static double Energy(const QuboSurface& s) {
-    double e = s.constantOffset;
-    for (int i = 0; i < s.n; i++) {
-        for (int j = 0; j < s.n; j++) {
-            e += s.qAt(i, j) * static_cast<double>(s.x[static_cast<size_t>(i)]) *
-                 static_cast<double>(s.x[static_cast<size_t>(j)]);
-        }
-    }
-    return e;
-}
+/** Multiply only upward (positive) mesh heights; downward valleys keep baseline scale (Stories 7–9). */
+static constexpr float kQBlockPositivePeakGain = 2.25f;
 
 /** Central palette: tweak here (or later load from config) so marble + mesh lines stay consistent. */
 struct GraphStyle {
@@ -1143,14 +1190,84 @@ static void DrawQBlockSliceLines(int n, float cx, float cz, float yPlane, float 
     }
 }
 
+/** Same height rule as the Q-block wire mesh (raw Q vs Hamiltonian blend, positive-peak gain). */
+static float QBlockMeshVertexHeight(const QuboSurface& surf, int gi, int gj, double qij, double scaleDen,
+                                    float ampVis, float valueExtrude, float coeffToEnergyBlend,
+                                    bool energyHeightAlternatingDemo) {
+    const float ve = std::max(0.f, std::min(1.f, valueExtrude));
+    const float blend = std::max(0.f, std::min(1.f, coeffToEnergyBlend));
+    const bool haveX = SurfHasAssignment(surf);
+    const double hCoeff = qij;
+    double xi = 0.0;
+    double xj = 0.0;
+    if (energyHeightAlternatingDemo) {
+        xi = static_cast<double>(gi & 1);
+        xj = static_cast<double>(gj & 1);
+    } else if (haveX && gi >= 0 && gj >= 0 && gi < surf.n && gj < surf.n) {
+        xi = static_cast<double>(surf.x[static_cast<size_t>(gi)]);
+        xj = static_cast<double>(surf.x[static_cast<size_t>(gj)]);
+    } else {
+        xi = static_cast<double>(gi & 1);
+        xj = static_cast<double>(gj & 1);
+    }
+    const double hEnergy = qij * xi * xj;
+    const double h = hCoeff * (1.0 - static_cast<double>(blend)) + hEnergy * static_cast<double>(blend);
+    float hn = static_cast<float>(h / scaleDen);
+    if (hn > 0.f) {
+        hn *= kQBlockPositivePeakGain;
+    }
+    return hn * ampVis * ve;
+}
+
+static float SampleQBlockMeshHeightBilinear(const QuboSurface& surf, int bi, int bj, int qn, float u, float v,
+                                            double scaleDen, float ampVis, float valueExtrude,
+                                            float coeffToEnergyBlend, bool energyHeightAlternatingDemo) {
+    if (qn <= 0) {
+        return 0.f;
+    }
+    if (qn == 1) {
+        const int gi = bi;
+        const int gj = bj;
+        return QBlockMeshVertexHeight(surf, gi, gj, surf.qAt(gi, gj), scaleDen, ampVis, valueExtrude,
+                                      coeffToEnergyBlend, energyHeightAlternatingDemo);
+    }
+    u = std::max(0.f, std::min(static_cast<float>(qn - 1), u));
+    v = std::max(0.f, std::min(static_cast<float>(qn - 1), v));
+    const int i0 = static_cast<int>(std::floor(u));
+    const int j0 = static_cast<int>(std::floor(v));
+    const int i1 = std::min(i0 + 1, qn - 1);
+    const int j1 = std::min(j0 + 1, qn - 1);
+    const float fu = u - static_cast<float>(i0);
+    const float fv = v - static_cast<float>(j0);
+    auto corner = [&](int ii, int jj) {
+        const int gi = bi + ii;
+        const int gj = bj + jj;
+        return QBlockMeshVertexHeight(surf, gi, gj, surf.qAt(gi, gj), scaleDen, ampVis, valueExtrude,
+                                      coeffToEnergyBlend, energyHeightAlternatingDemo);
+    };
+    const float h00 = corner(i0, j0);
+    const float h10 = corner(i1, j0);
+    const float h01 = corner(i0, j1);
+    const float h11 = corner(i1, j1);
+    const float h0 = h00 * (1.f - fu) + h10 * fu;
+    const float h1 = h01 * (1.f - fu) + h11 * fu;
+    return h0 * (1.f - fv) + h1 * fv;
+}
+
 static void DrawQBlockMesh3D(const QuboSurface& surf, int bi, int bj, int qn, float oxB, float ozB, float gx, float gz,
                              double scaleDen, float ampVis, float meshAlpha, float diagAlpha, float assignAlpha,
-                             float valueExtrude = 1.f) {
+                             float valueExtrude = 1.f, float coeffToEnergyBlend = 0.f,
+                             bool energyHeightAlternatingDemo = false) {
     if (qn <= 0) {
         return;
     }
     const float ve = std::max(0.f, std::min(1.f, valueExtrude));
+    const float blend = std::max(0.f, std::min(1.f, coeffToEnergyBlend));
     Color meshLine = g_style.meshLine;
+    if (blend > 0.004f) {
+        const Color energyTint = {175, 210, 255, meshLine.a};
+        meshLine = LerpColorRgb(meshLine, energyTint, blend * 0.78f);
+    }
     meshLine.a = static_cast<unsigned char>(std::round(static_cast<float>(meshLine.a) * meshAlpha));
     Color diagLine = g_style.diagonalLine;
     diagLine.a = static_cast<unsigned char>(std::round(static_cast<float>(diagLine.a) * diagAlpha));
@@ -1162,16 +1279,21 @@ static void DrawQBlockMesh3D(const QuboSurface& surf, int bi, int bj, int qn, fl
             const int gi = bi + i;
             const int gj = bj + j;
             double qij = surf.qAt(gi, gj);
-            float y = static_cast<float>(qij / scaleDen) * ampVis * ve;
+            float y = QBlockMeshVertexHeight(surf, gi, gj, qij, scaleDen, ampVis, valueExtrude, coeffToEnergyBlend,
+                                             energyHeightAlternatingDemo);
             Vector3 p = {oxB + static_cast<float>(i) * gx, y, ozB + static_cast<float>(j) * gz};
             if (i + 1 < qn) {
-                double qnxt = surf.qAt(bi + i + 1, gj);
-                float yn = static_cast<float>(qnxt / scaleDen) * ampVis * ve;
+                const int gi2 = bi + i + 1;
+                double qnxt = surf.qAt(gi2, gj);
+                float yn = QBlockMeshVertexHeight(surf, gi2, gj, qnxt, scaleDen, ampVis, valueExtrude,
+                                                  coeffToEnergyBlend, energyHeightAlternatingDemo);
                 DrawLine3D(p, {oxB + static_cast<float>(i + 1) * gx, yn, ozB + static_cast<float>(j) * gz}, meshLine);
             }
             if (j + 1 < qn) {
-                double qnxt = surf.qAt(gi, bj + j + 1);
-                float yn = static_cast<float>(qnxt / scaleDen) * ampVis * ve;
+                const int gj2 = bj + j + 1;
+                double qnxt = surf.qAt(gi, gj2);
+                float yn = QBlockMeshVertexHeight(surf, gi, gj2, qnxt, scaleDen, ampVis, valueExtrude,
+                                                  coeffToEnergyBlend, energyHeightAlternatingDemo);
                 DrawLine3D(p, {oxB + static_cast<float>(i) * gx, yn, ozB + static_cast<float>(j + 1) * gz}, meshLine);
             }
             if (gi == gj && ve > 0.004f) {
@@ -1192,7 +1314,8 @@ static void DrawQBlockMesh3D(const QuboSurface& surf, int bi, int bj, int qn, fl
                     continue;
                 }
                 double qii = surf.qAt(gi, gj);
-                float y = static_cast<float>(qii / scaleDen) * ampVis * ve;
+                float y = QBlockMeshVertexHeight(surf, gi, gj, qii, scaleDen, ampVis, valueExtrude, coeffToEnergyBlend,
+                                                 energyHeightAlternatingDemo);
                 Vector3 p = {oxB + static_cast<float>(i) * gx, y, ozB + static_cast<float>(j) * gz};
                 float top = p.y + 0.35f * ampVis * ve;
                 DrawLine3D(p, {p.x, top, p.z}, assignLine);
@@ -1200,6 +1323,237 @@ static void DrawQBlockMesh3D(const QuboSurface& surf, int bi, int bj, int qn, fl
             }
         }
     }
+}
+
+struct HamRollingBall {
+    float u = 0.f;
+    float v = 0.f;
+    float vu = 0.f;
+    float vv = 0.f;
+    Color wire{};
+    Color fill{};
+};
+
+static Color HamRollingBallWire(int idx) {
+    static const Color palette[] = {
+        {0, 102, 204, 255},
+        {0, 53, 107, 255},
+        {45, 140, 60, 255},
+        {120, 200, 255, 255},
+    };
+    return palette[idx & 3];
+}
+
+static void InitHamRollingBalls(std::vector<HamRollingBall>& balls, int qn, uint32_t salty) {
+    constexpr int kN = 14;
+    if (qn < 2) {
+        balls.clear();
+        return;
+    }
+    balls.resize(kN);
+    const float span = static_cast<float>(qn - 1);
+    for (int i = 0; i < kN; i++) {
+        const float g = std::fmod(0.6180339887f * static_cast<float>(i + 1) + static_cast<float>(salty & 4095u) * 0.001f,
+                                  1.f);
+        const float h = std::fmod(0.4142135623f * static_cast<float>(i + 7) + static_cast<float>(salty >> 12) * 0.0023f,
+                                  1.f);
+        HamRollingBall b;
+        b.u = 0.11f * span + g * 0.78f * span;
+        b.v = 0.11f * span + h * 0.78f * span;
+        b.vu = 0.f;
+        b.vv = 0.f;
+        b.wire = HamRollingBallWire(i);
+        b.fill = b.wire;
+        b.fill.a = 210;
+        balls[static_cast<size_t>(i)] = b;
+    }
+}
+
+static void ClampRolling1D(float& pos, float& vel, float lo, float hi) {
+    if (pos < lo) {
+        pos = lo;
+        if (vel < 0.f) {
+            vel = -vel * 0.38f;
+        }
+    }
+    if (pos > hi) {
+        pos = hi;
+        if (vel > 0.f) {
+            vel = -vel * 0.38f;
+        }
+    }
+}
+
+static void UpdateHamRollingBalls(std::vector<HamRollingBall>& balls, const QuboSurface& surf, int bi, int bj, int qn,
+                                  double scaleDen, float ampVis, float valueExtrude, float blend, bool energyAlt,
+                                  float dt) {
+    if (qn < 2 || balls.empty() || dt <= 0.f) {
+        return;
+    }
+    const float span = static_cast<float>(qn - 1);
+    float eps = 0.07f * span;
+    if (eps < 0.045f) {
+        eps = 0.045f;
+    }
+    if (eps > 0.24f) {
+        eps = 0.24f;
+    }
+    const float accelK = 32.f;
+    const float friction = std::exp(-6.5f * dt);
+    for (auto& b : balls) {
+        auto hSample = [&](float su, float sv) {
+            return SampleQBlockMeshHeightBilinear(surf, bi, bj, qn, su, sv, scaleDen, ampVis, valueExtrude, blend,
+                                                  energyAlt);
+        };
+        const float u = b.u;
+        const float v = b.v;
+        const float um = std::max(0.f, u - eps);
+        const float up = std::min(span, u + eps);
+        const float vm = std::max(0.f, v - eps);
+        const float vp = std::min(span, v + eps);
+        const float duEff = up - um;
+        const float dvEff = vp - vm;
+        const float dhu = (duEff > 1e-5f) ? (hSample(up, v) - hSample(um, v)) / duEff : 0.f;
+        const float dhv = (dvEff > 1e-5f) ? (hSample(u, vp) - hSample(u, vm)) / dvEff : 0.f;
+        b.vu += -accelK * dhu * dt;
+        b.vv += -accelK * dhv * dt;
+        b.vu *= friction;
+        b.vv *= friction;
+        const float v2 = b.vu * b.vu + b.vv * b.vv;
+        const float g2 = dhu * dhu + dhv * dhv;
+        if (v2 < 0.00005f && g2 < 1e-10f) {
+            b.vu = 0.f;
+            b.vv = 0.f;
+        } else if (v2 < 0.00028f && g2 < 6e-9f) {
+            b.vu *= 0.82f;
+            b.vv *= 0.82f;
+        }
+        b.u += b.vu * dt;
+        b.v += b.vv * dt;
+        ClampRolling1D(b.u, b.vu, 0.f, span);
+        ClampRolling1D(b.v, b.vv, 0.f, span);
+    }
+}
+
+enum class QaoaStoryPhase : int {
+    PickDiagonal = 0,
+    PickOffDiagonal,
+    RiseUp,
+    GridFade,
+    MorphGates,
+    DashToQaoa,
+    BoxSpinSpit,
+    HoldOutro,
+    Count
+};
+
+static void QaoaDecodePhase(float tSec, QaoaStoryPhase* outPh, float* outLocal) {
+    const float a0 = 0.82f;
+    const float a1 = a0 + 0.82f;
+    const float a2 = a1 + 1.22f;
+    const float a3 = a2 + 0.78f;
+    const float a4 = a3 + 0.68f;
+    const float a5 = a4 + 1.05f;
+    const float a6 = a5 + 1.45f;
+    if (tSec < 0.f) {
+        *outPh = QaoaStoryPhase::PickDiagonal;
+        *outLocal = 0.f;
+        return;
+    }
+    if (tSec < a0) {
+        *outPh = QaoaStoryPhase::PickDiagonal;
+        *outLocal = tSec / a0;
+        return;
+    }
+    if (tSec < a1) {
+        *outPh = QaoaStoryPhase::PickOffDiagonal;
+        *outLocal = (tSec - a0) / (a1 - a0);
+        return;
+    }
+    if (tSec < a2) {
+        *outPh = QaoaStoryPhase::RiseUp;
+        *outLocal = (tSec - a1) / (a2 - a1);
+        return;
+    }
+    if (tSec < a3) {
+        *outPh = QaoaStoryPhase::GridFade;
+        *outLocal = (tSec - a2) / (a3 - a2);
+        return;
+    }
+    if (tSec < a4) {
+        *outPh = QaoaStoryPhase::MorphGates;
+        *outLocal = (tSec - a3) / (a4 - a3);
+        return;
+    }
+    if (tSec < a5) {
+        *outPh = QaoaStoryPhase::DashToQaoa;
+        *outLocal = (tSec - a4) / (a5 - a4);
+        return;
+    }
+    if (tSec < a6) {
+        *outPh = QaoaStoryPhase::BoxSpinSpit;
+        *outLocal = (tSec - a5) / (a6 - a5);
+        return;
+    }
+    *outPh = QaoaStoryPhase::HoldOutro;
+    *outLocal = 1.f;
+}
+
+static void FindQaoaLowestVertices(const QuboSurface& surf, int bi, int bj, int qn, double scaleDen, float ampVis,
+                                   bool energyAlt, int* outDiagI, int* outOffI, int* outOffJ) {
+    *outDiagI = 0;
+    *outOffI = 0;
+    *outOffJ = (qn > 1) ? 1 : 0;
+    if (qn <= 0) {
+        return;
+    }
+    float bestD = 1e30f;
+    for (int i = 0; i < qn; i++) {
+        const int gi = bi + i;
+        const int gj = bj + i;
+        const float h =
+            QBlockMeshVertexHeight(surf, gi, gj, surf.qAt(gi, gj), scaleDen, ampVis, 1.f, 1.f, energyAlt);
+        if (h < bestD) {
+            bestD = h;
+            *outDiagI = i;
+        }
+    }
+    if (qn < 2) {
+        return;
+    }
+    float bestO = 1e30f;
+    bool any = false;
+    for (int i = 0; i < qn; i++) {
+        for (int j = 0; j < qn; j++) {
+            if (i == j) {
+                continue;
+            }
+            const int gi = bi + i;
+            const int gj = bj + j;
+            const float h =
+                QBlockMeshVertexHeight(surf, gi, gj, surf.qAt(gi, gj), scaleDen, ampVis, 1.f, 1.f, energyAlt);
+            if (h < bestO) {
+                bestO = h;
+                *outOffI = i;
+                *outOffJ = j;
+                any = true;
+            }
+        }
+    }
+    if (!any) {
+        *outOffI = 0;
+        *outOffJ = 1;
+    }
+}
+
+static Vector3 QaoaBallWorld(const QuboSurface& surf, int bi, int bj, int qi, int qj, double scaleDen, float amp,
+                             bool energyAlt, float oxB, float ozB, float gx, float gz, float marbleR,
+                             float yLift) {
+    const int gi = bi + qi;
+    const int gj = bj + qj;
+    const float y =
+        QBlockMeshVertexHeight(surf, gi, gj, surf.qAt(gi, gj), scaleDen, amp, 1.f, 1.f, energyAlt);
+    return {oxB + static_cast<float>(qi) * gx, y + marbleR + yLift, ozB + static_cast<float>(qj) * gz};
 }
 
 static Color QHeatColor(double v, double maxAbs) {
@@ -1223,6 +1577,35 @@ static Color QHeatColor(double v, double maxAbs) {
         (unsigned char)(45 + (200 * (1.0f - u))),
         255,
     };
+}
+
+static void DrawQaoaBestBundlesMatrix2D(const QuboSurface& surf, int bi, int bj, int qn, int sw, int sh,
+                                        double maxAbsQ, float alpha, int risePx = 0) {
+    (void)sh;
+    if (alpha < 0.02f) {
+        return;
+    }
+    const int fs = 28;
+    const char* title = "best bundles";
+    const int tw = MeasureText(title, fs);
+    const int cx = sw / 2;
+    const int ty = 96 - risePx;
+    Color tc = {220, 230, 245, static_cast<unsigned char>(std::min(255.f, alpha * 255.f))};
+    DrawText(title, cx - tw / 2, ty, fs, tc);
+    const int cell = std::max(12, std::min(32, 420 / std::max(1, qn)));
+    const int gridW = qn * cell;
+    const int gx0 = cx - gridW / 2;
+    const int gy0 = ty + fs + 18;
+    for (int i = 0; i < qn; i++) {
+        for (int j = 0; j < qn; j++) {
+            const double v = surf.qAt(bi + i, bj + j);
+            Color c = QHeatColor(v, maxAbsQ);
+            c.a = static_cast<unsigned char>(std::round(static_cast<float>(c.a) * alpha));
+            DrawRectangle(gx0 + j * cell, gy0 + i * cell, cell - 1, cell - 1, c);
+        }
+    }
+    Color frame = {0, 102, 204, static_cast<unsigned char>(std::min(255.f, alpha * 220.f))};
+    DrawRectangleLines(gx0 - 3, gy0 - 3, gridW + 6, qn * cell + 6, frame);
 }
 
 struct QMatrixLayout {
@@ -1529,7 +1912,11 @@ enum class StoryStep : int {
     MarblesMcMerge = 6,      // full n×n Q (coverages + slacks) → stack → single teal matrix
     QSliceToBlock = 7,       // slice n×n → pick block → morph into smaller Q mesh
     QBlockField = 8,
-    Count = 9,
+    /** Smooth blend from raw Q_ij heights to pairwise term heights Q_ij x_i x_j (same grid; Hamiltonian / energy view). */
+    HamiltonianLandscape = 9,
+    /** Lowest diagonal / off-diagonal sites → Z / ZZ → QAOA box → “best bundles” + block Q grid (press → from Hamiltonian). */
+    QaoaGateDemo = 10,
+    Count = 11,
 };
 
 static constexpr float kFamilyColorBlendSec = 0.85f;
@@ -1537,6 +1924,141 @@ static constexpr float kFamilyPauseAfterColorSec = 0.5f;
 static constexpr float kFamilyGroupMoveSec = 1.15f;
 static constexpr float kDepSpreadSec = 0.95f;
 static constexpr float kIncompatDrawSec = 0.9f;
+
+static Font gStoryEqFont{};
+static bool gStoryEqFontLoaded = false;
+
+/** UTF-8 corpus covering every glyph used in on-screen equations (Noto Sans). */
+static const char kEqFontGlyphCorpus[] =
+    u8"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    u8"0123456789"
+    u8" ,.;:_+-*/()[]{}^'=<>"
+    u8"QEMCHPqijkmpstvAGSuvhZUJBX"
+    u8"\u2208\u2264\u2265\u2212\u00b7\u00d7\u03b4\u03bb\u03b3\u03b2\u2207\u2211\u220f\u2190\u2202\u221d";
+
+static bool InitStoryEquationFont() {
+    const char* paths[] = {
+        "fonts/NotoSans-Regular.ttf",
+        "subprojects/will/visualizations/qubo_vis/fonts/NotoSans-Regular.ttf",
+    };
+    const char* chosen = nullptr;
+    for (const char* p : paths) {
+        if (FileExists(p)) {
+            chosen = p;
+            break;
+        }
+    }
+    if (!chosen) {
+        return false;
+    }
+    int cpCount = 0;
+    int* cps = LoadCodepoints(kEqFontGlyphCorpus, &cpCount);
+    if (!cps || cpCount <= 0) {
+        return false;
+    }
+    gStoryEqFont = LoadFontEx(chosen, 96, cps, cpCount);
+    UnloadCodepoints(cps);
+    if (gStoryEqFont.glyphCount <= 0) {
+        return false;
+    }
+    SetTextureFilter(gStoryEqFont.texture, TEXTURE_FILTER_TRILINEAR);
+    gStoryEqFontLoaded = true;
+    return true;
+}
+
+static void ShutdownStoryEquationFont() {
+    if (gStoryEqFontLoaded) {
+        UnloadFont(gStoryEqFont);
+        gStoryEqFont = {};
+        gStoryEqFontLoaded = false;
+    }
+}
+
+/** Equations only: large white, right-aligned (LaTeX-like Unicode; true LaTeX needs external render). */
+static void DrawStoryMathPanel(StoryStep step, int sw, int sh, bool showLegend, bool showQMatrix,
+                               const QMatrixLayout& qLay, const QuboSurface& surf) {
+    const float fontSize = gStoryEqFontLoaded ? 34.f : 22.f;
+    const float spacing = 2.f;
+    const float lineStep = fontSize + 10.f;
+    const float marginR = 22.f;
+    const int legReserve = showLegend ? (432 + 36) : 0;
+    const float rightEdge = static_cast<float>(sw) - marginR - static_cast<float>(legReserve);
+
+    float py = 56.f;
+    if (showQMatrix) {
+        const Rectangle qb = QMatrixHitBounds(qLay);
+        const float belowQ = qb.y + qb.height + 16.f;
+        if (belowQ + 120.f < static_cast<float>(sh) - 100.f) {
+            py = std::max(py, belowQ);
+        }
+    }
+
+    const Font font = gStoryEqFontLoaded ? gStoryEqFont : GetFontDefault();
+    const Color white = {255, 255, 255, 255};
+
+    auto drawEqLine = [&](const char* utf8Line) {
+        Vector2 sz = MeasureTextEx(font, utf8Line, fontSize, spacing);
+        float x = rightEdge - sz.x;
+        if (x < 12.f) {
+            x = 12.f;
+        }
+        DrawTextEx(font, utf8Line, {x, py}, fontSize, spacing, white);
+        py += lineStep;
+    };
+
+    switch (step) {
+    case StoryStep::MarblesDropWhite:
+    case StoryStep::MarblesFamilyColor:
+        drawEqLine(u8"x_i \u2208 {0,1}");
+        break;
+    case StoryStep::MarblesDependencies:
+        drawEqLine(u8"x_j \u2264 x_i");
+        break;
+    case StoryStep::MarblesIncompatibilities:
+        drawEqLine(u8"x_a + x_b \u2264 1");
+        break;
+    case StoryStep::MarblesBundler:
+        drawEqLine(u8"x \u2208 {0,1}^K");
+        break;
+    case StoryStep::MarblesMcDecompose:
+        drawEqLine(u8"M_{ij} = p_i m_i (1 \u2212 \u03b4_m)");
+        drawEqLine(u8"C_{ij} = c_{i,m}");
+        break;
+    case StoryStep::MarblesMcMerge:
+        drawEqLine(u8"E(x) = x^T Q x + c");
+        break;
+    case StoryStep::QSliceToBlock:
+        drawEqLine(u8"P(t) = (1\u2212e(t))P_0 + e(t)P_1");
+        if (surf.parametricLambda) {
+            drawEqLine(u8"Q = s\u00b7diag(m) + \u03bb Q_{pen}");
+        }
+        break;
+    case StoryStep::QBlockField:
+        drawEqLine(u8"h_{ij} = (q_{ij}/S)\u00b7A\u00b7v");
+        drawEqLine(u8"h_{ij} \u2190 G\u00b7h_{ij}   (h_{ij}>0)");
+        if (surf.parametricLambda) {
+            drawEqLine(u8"Q_{ij} = s\u00b7m_i\u03b4_{ij} + \u03bb Q^{pen}_{ij}");
+            drawEqLine(u8"c = \u03bb\u00b7c_\u03bb");
+        }
+        break;
+    case StoryStep::HamiltonianLandscape:
+        drawEqLine(u8"H_{ij}(u)=(1\u2212u)Q_{ij}+u\u00b7Q_{ij}x_ix_j");
+        drawEqLine(u8"h_{ij}=(H_{ij}/S_h)\u00b7A\u00b7v");
+        drawEqLine(u8"h_{ij}\u2190 G\u00b7h_{ij}   (h_{ij}>0)");
+        drawEqLine(u8"g \u221d \u2212\u2207 h");
+        if (surf.parametricLambda) {
+            drawEqLine(u8"Q_{ij} = s\u00b7m_i\u03b4_{ij} + \u03bb Q^{pen}_{ij}");
+        }
+        break;
+    case StoryStep::QaoaGateDemo:
+        drawEqLine(u8"H_C=\u2211_i h_i Z_i+\u2211_{i<j}J_{ij}Z_iZ_j");
+        drawEqLine(u8"U_C(\u03b3)=e^{\u2212i\u03b3 H_C}");
+        drawEqLine(u8"U_B(\u03b2)=\u220f_j e^{\u2212i\u03b2 X_j}");
+        break;
+    default:
+        break;
+    }
+}
 
 static float EaseOutCubic(float t) {
     if (t <= 0.f) return 0.f;
@@ -1827,12 +2349,15 @@ int main(int argc, char** argv) {
                   surf.packageIndex, surf.n);
     InitWindow(sw, sh, winTitle);
     SetTargetFPS(120);
+    InitStoryEquationFont();
 
-    Camera3D camera = {0};
-    camera.fovy = 45.0f;
-    camera.projection = CAMERA_PERSPECTIVE;
-    camera.target = {0.0f, 0.0f, 0.0f};
-    camera.up = {0.0f, 1.0f, 0.0f};
+    Camera3D camera = {
+        {0.0f, 0.0f, 0.0f},
+        {0.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+        45.0f,
+        CAMERA_PERSPECTIVE,
+    };
 
     double scaleDen = std::max(MaxAbsQ(surf), 1e-12);
     const float amp = static_cast<float>(std::max(surf.n, 3)) * 0.35f;
@@ -1868,7 +2393,11 @@ int main(int argc, char** argv) {
         const int gi = qBlockBaseI + i;
         const int gj = qBlockBaseJ + j;
         double qij = surf.qAt(gi, gj);
-        float y = static_cast<float>(qij / scaleDenBlock) * ampBlock;
+        float hn = static_cast<float>(qij / scaleDenBlock);
+        if (hn > 0.f) {
+            hn *= kQBlockPositivePeakGain;
+        }
+        float y = hn * ampBlock;
         return {oxBlock + static_cast<float>(i) * gxQBlock, y, ozBlock + static_cast<float>(j) * gzQBlock};
     };
 
@@ -1900,8 +2429,19 @@ int main(int argc, char** argv) {
     float qBlockExtrudeU = 0.f;
     bool qBlockExtrudeAnimating = false;
     float qBlockExtrudeElapsed = 0.f;
+    float hamiltonianBlendU = 0.f;
+    float hamiltonianBlendElapsed = 0.f;
     Vector3 qLabelWorld = {0.f, 0.f, 0.f};
     bool haveQLabelWorld = false;
+    std::vector<HamRollingBall> hamRollingBalls;
+    float qaoaStoryElapsed = 0.f;
+    bool qaoaPlayEntrance = true;
+    float qaoaBoxSpinAngle = 0.f;
+    int qaoaDiagI = 0;
+    int qaoaOffI = 0;
+    int qaoaOffJ = 1;
+    double qaoaScaleDenSnap = 1.0;
+    bool qaoaEnergyAltSnap = false;
 
     while (!WindowShouldClose()) {
         const QMatrixLayout qLay = MakeQMatrixLayout(surf, sh);
@@ -1936,6 +2476,11 @@ int main(int argc, char** argv) {
         if (IsKeyPressed(KEY_R)) autoSpin = !autoSpin;
         if (IsKeyPressed(KEY_I)) showLegend = !showLegend;
         if (IsKeyPressed(KEY_Q)) showQMatrix = !showQMatrix;
+        if (IsKeyPressed(KEY_B) && storyStep == StoryStep::HamiltonianLandscape) {
+            InitHamRollingBalls(
+                hamRollingBalls, qMeshN,
+                static_cast<uint32_t>(std::lround(GetTime() * 1.0e6)) ^ 0x9E3779B9u);
+        }
 
         if (surf.parametricLambda) {
             if (!IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
@@ -1965,6 +2510,13 @@ int main(int argc, char** argv) {
         }
         scaleDen = std::max(MaxAbsQ(surf), 1e-12);
         scaleDenBlock = std::max(MaxAbsQSubmatrix(surf, qBlockBaseI, qBlockBaseJ, qMeshN), 1e-12);
+        /** If every x in the block is 1 (or x absent), Q_ij·x_i·x_j == Q_ij — use alternating demo bits so morph is visible. */
+        const bool hamMorphUseAlternatingDemo =
+            !SurfHasAssignment(surf) || QBlockVarsAllOne(surf, qBlockBaseI, qBlockBaseJ, qMeshN);
+        const double termAbsMaxBlock = MaxAbsQEnergyTermSubmatrixForMorph(
+            surf, qBlockBaseI, qBlockBaseJ, qMeshN, hamMorphUseAlternatingDemo);
+        const double scaleDenMeshHam =
+            std::max(scaleDenBlock, std::max(termAbsMaxBlock, 1e-18));
 
         const StoryStep prevStory = storyStep;
         if (IsKeyPressed(KEY_RIGHT)) {
@@ -2019,6 +2571,20 @@ int main(int argc, char** argv) {
             qBlockExtrudeAnimating = false;
             qBlockExtrudeElapsed = 0.f;
         }
+        if (storyStep != prevStory && storyStep == StoryStep::HamiltonianLandscape) {
+            hamiltonianBlendElapsed = 0.f;
+            hamiltonianBlendU = 0.f;
+            InitHamRollingBalls(hamRollingBalls, qMeshN, 7u);
+        }
+        if (storyStep != prevStory && storyStep == StoryStep::QaoaGateDemo) {
+            qaoaPlayEntrance = (prevStory == StoryStep::HamiltonianLandscape);
+            qaoaStoryElapsed = 0.f;
+            qaoaBoxSpinAngle = 0.f;
+            qaoaScaleDenSnap = scaleDenMeshHam;
+            qaoaEnergyAltSnap = hamMorphUseAlternatingDemo;
+            FindQaoaLowestVertices(surf, qBlockBaseI, qBlockBaseJ, qMeshN, qaoaScaleDenSnap, ampBlock,
+                                  qaoaEnergyAltSnap, &qaoaDiagI, &qaoaOffI, &qaoaOffJ);
+        }
         if (prevStory == StoryStep::QSliceToBlock && storyStep != StoryStep::QSliceToBlock &&
             storyStep != StoryStep::QBlockField) {
             qBlockExtrudeAnimating = false;
@@ -2068,6 +2634,12 @@ int main(int argc, char** argv) {
             qSliceElapsed += GetFrameTime();
         }
 
+        if (storyStep != StoryStep::QaoaGateDemo) {
+            qaoaStoryElapsed = 0.f;
+        } else if (qaoaPlayEntrance) {
+            qaoaStoryElapsed += GetFrameTime();
+        }
+
         if (storyStep == StoryStep::QSliceToBlock && qBlockExtrudeAnimating) {
             qBlockExtrudeElapsed += GetFrameTime();
             const float kQBlockExtrudeDur = 1.15f;
@@ -2077,6 +2649,19 @@ int main(int argc, char** argv) {
                 qBlockExtrudeU = 1.f;
                 storyStep = StoryStep::QBlockField;
             }
+        }
+
+        if (storyStep == StoryStep::HamiltonianLandscape) {
+            hamiltonianBlendElapsed += GetFrameTime();
+            const float kHamiltonianMorphDur = 1.35f;
+            hamiltonianBlendU = SmoothStep(std::min(1.f, hamiltonianBlendElapsed / kHamiltonianMorphDur));
+            if (qMeshN > 1 && !hamRollingBalls.empty()) {
+                UpdateHamRollingBalls(hamRollingBalls, surf, qBlockBaseI, qBlockBaseJ, qMeshN, scaleDenMeshHam, ampBlock,
+                                      1.f, hamiltonianBlendU, hamMorphUseAlternatingDemo, GetFrameTime());
+            }
+        } else {
+            hamiltonianBlendElapsed = 0.f;
+            hamiltonianBlendU = 0.f;
         }
 
         if (autoSpin) {
@@ -2089,6 +2674,121 @@ int main(int argc, char** argv) {
             const float nx = off.x * ca - off.z * sa;
             const float nz = off.x * sa + off.z * ca;
             camera.position = {c.x + nx, c.y + off.y, c.z + nz};
+        }
+
+        QaoaStoryPhase qaoaPh = QaoaStoryPhase::PickDiagonal;
+        float qaoaPhaseU = 0.f;
+        Vector3 qaoaWorldD = {0.f, 0.f, 0.f};
+        Vector3 qaoaWorldO = {0.f, 0.f, 0.f};
+        Vector3 qaoaBoxPos = {0.f, 0.f, 0.f};
+        float qaoaBoxW = 1.f;
+        float qaoaBoxH = 1.f;
+        float qaoaBoxD = 1.f;
+        float qaoaMeshAlpha = 0.f;
+        float qaoaGateLabelA = 0.f;
+        float qaoaBundleAlpha = 0.f;
+        float qaoaSphereAD = 0.f;
+        float qaoaSphereAO = 0.f;
+        float qaoaBoxAlpha = 0.f;
+
+        if (storyStep == StoryStep::QaoaGateDemo && qMeshN > 0) {
+            QaoaDecodePhase(qaoaPlayEntrance ? qaoaStoryElapsed : 1.0e6f, &qaoaPh, &qaoaPhaseU);
+
+            const float marbleR = std::max(0.04f, std::min(gxQBlock, gzQBlock) * 0.17f);
+            const float riseH = ampBlock * 0.58f;
+            float riseEase = 0.f;
+            if (static_cast<int>(qaoaPh) > static_cast<int>(QaoaStoryPhase::RiseUp)) {
+                riseEase = 1.f;
+            } else if (qaoaPh == QaoaStoryPhase::RiseUp) {
+                riseEase = EaseInOutCubic(qaoaPhaseU);
+            }
+            const float yLift = riseH * riseEase;
+
+            qaoaMeshAlpha = 1.f;
+            if (qaoaPh == QaoaStoryPhase::GridFade) {
+                qaoaMeshAlpha = 1.f - SmoothStep(qaoaPhaseU);
+            } else if (static_cast<int>(qaoaPh) > static_cast<int>(QaoaStoryPhase::GridFade)) {
+                qaoaMeshAlpha = 0.f;
+            }
+
+            const Vector3 pD0 =
+                QaoaBallWorld(surf, qBlockBaseI, qBlockBaseJ, qaoaDiagI, qaoaDiagI, qaoaScaleDenSnap, ampBlock,
+                              qaoaEnergyAltSnap, oxBlock, ozBlock, gxQBlock, gzQBlock, marbleR, yLift);
+            const Vector3 pO0 =
+                QaoaBallWorld(surf, qBlockBaseI, qBlockBaseJ, qaoaOffI, qaoaOffJ, qaoaScaleDenSnap, ampBlock,
+                              qaoaEnergyAltSnap, oxBlock, ozBlock, gxQBlock, gzQBlock, marbleR, yLift);
+
+            const float midU = 0.5f * static_cast<float>(std::max(0, qMeshN - 1));
+            const Vector3 meshMid = {oxBlock + midU * gxQBlock, ampBlock * 0.22f, ozBlock + midU * gzQBlock};
+            qaoaBoxW = std::max(gxQBlock, gzQBlock) * 1.55f;
+            qaoaBoxH = ampBlock * 0.42f;
+            qaoaBoxD = qaoaBoxW * 0.88f;
+            qaoaBoxPos = {meshMid.x + qaoaBoxW * 1.2f, meshMid.y + qaoaBoxH * 0.55f, meshMid.z};
+
+            const Vector3 targetD = {qaoaBoxPos.x - qaoaBoxW * 0.48f, qaoaBoxPos.y + qaoaBoxH * 0.05f,
+                                     qaoaBoxPos.z + qaoaBoxD * 0.14f};
+            const Vector3 targetO = {qaoaBoxPos.x - qaoaBoxW * 0.1f, qaoaBoxPos.y + qaoaBoxH * 0.05f,
+                                     qaoaBoxPos.z - qaoaBoxD * 0.2f};
+            float dashT = 0.f;
+            if (qaoaPh == QaoaStoryPhase::DashToQaoa) {
+                dashT = SmoothStep(qaoaPhaseU);
+            } else if (static_cast<int>(qaoaPh) > static_cast<int>(QaoaStoryPhase::DashToQaoa)) {
+                dashT = 1.f;
+            }
+            qaoaWorldD = Vector3Lerp(pD0, targetD, dashT);
+            qaoaWorldO = Vector3Lerp(pO0, targetO, dashT);
+
+            qaoaSphereAD = 1.f;
+            qaoaSphereAO = 1.f;
+            if (qaoaPh == QaoaStoryPhase::PickDiagonal) {
+                qaoaSphereAO = 0.f;
+            }
+            if (qaoaPh == QaoaStoryPhase::MorphGates) {
+                const float m = SmoothStep(qaoaPhaseU);
+                qaoaSphereAD *= (1.f - 0.9f * m);
+                qaoaSphereAO *= (1.f - 0.9f * m);
+            } else if (qaoaPh == QaoaStoryPhase::DashToQaoa) {
+                qaoaSphereAD *= 0.12f;
+                qaoaSphereAO *= 0.12f;
+            } else if (static_cast<int>(qaoaPh) >= static_cast<int>(QaoaStoryPhase::BoxSpinSpit)) {
+                const float ab = (qaoaPh == QaoaStoryPhase::BoxSpinSpit) ? SmoothStep(qaoaPhaseU) : 1.f;
+                const float remn = (1.f - ab) * 0.12f;
+                qaoaSphereAD *= remn;
+                qaoaSphereAO *= remn;
+            }
+
+            qaoaBoxAlpha = 0.f;
+            if (qaoaPh == QaoaStoryPhase::MorphGates) {
+                qaoaBoxAlpha = SmoothStep(qaoaPhaseU) * 0.92f;
+            } else if (qaoaPh == QaoaStoryPhase::DashToQaoa) {
+                qaoaBoxAlpha = 0.92f + 0.08f * SmoothStep(qaoaPhaseU);
+            } else if (static_cast<int>(qaoaPh) >= static_cast<int>(QaoaStoryPhase::BoxSpinSpit)) {
+                qaoaBoxAlpha = 1.f;
+            }
+
+            qaoaGateLabelA = 0.f;
+            if (qaoaPh == QaoaStoryPhase::MorphGates) {
+                qaoaGateLabelA = SmoothStep(qaoaPhaseU);
+            } else if (qaoaPh == QaoaStoryPhase::DashToQaoa) {
+                qaoaGateLabelA = 1.f;
+            } else if (qaoaPh == QaoaStoryPhase::BoxSpinSpit) {
+                qaoaGateLabelA = std::max(0.f, 1.f - SmoothStep(qaoaPhaseU * 1.12f));
+            }
+
+            qaoaBundleAlpha = 0.f;
+            if (qaoaPh == QaoaStoryPhase::BoxSpinSpit) {
+                qaoaBundleAlpha = SmoothStep((qaoaPhaseU - 0.18f) / 0.75f);
+            } else if (qaoaPh == QaoaStoryPhase::HoldOutro) {
+                qaoaBundleAlpha = 1.f;
+            }
+
+            const float dtSpin = GetFrameTime();
+            if (qaoaPh == QaoaStoryPhase::BoxSpinSpit) {
+                qaoaBoxSpinAngle +=
+                    400.f * dtSpin * (0.52f + 0.48f * std::sin(qaoaPhaseU * 3.14159265f));
+            } else if (qaoaPh == QaoaStoryPhase::HoldOutro) {
+                qaoaBoxSpinAngle += 22.f * dtSpin;
+            }
         }
 
         BeginDrawing();
@@ -2775,10 +3475,112 @@ int main(int argc, char** argv) {
         } else if (storyStep == StoryStep::QBlockField) {
             // Story floor off here so the n×n grid does not clash with the expanded Q-block mesh.
             DrawQBlockMesh3D(surf, qBlockBaseI, qBlockBaseJ, qMeshN, oxBlock, ozBlock, gxQBlock, gzQBlock,
-                             scaleDenBlock, ampBlock, 1.f, 1.f, 1.f);
+                             scaleDenBlock, ampBlock, 1.f, 1.f, 1.f, 1.f, 0.f);
+        } else if (storyStep == StoryStep::HamiltonianLandscape) {
+            DrawQBlockMesh3D(surf, qBlockBaseI, qBlockBaseJ, qMeshN, oxBlock, ozBlock, gxQBlock, gzQBlock,
+                             scaleDenMeshHam, ampBlock, 1.f, 1.f, 1.f, 1.f, hamiltonianBlendU,
+                             hamMorphUseAlternatingDemo);
+            if (qMeshN > 1 && !hamRollingBalls.empty()) {
+                const float marbleR = std::min(gxQBlock, gzQBlock) * 0.17f;
+                for (const auto& b : hamRollingBalls) {
+                    const float ySurf = SampleQBlockMeshHeightBilinear(
+                        surf, qBlockBaseI, qBlockBaseJ, qMeshN, b.u, b.v, scaleDenMeshHam, ampBlock, 1.f,
+                        hamiltonianBlendU, hamMorphUseAlternatingDemo);
+                    const Vector3 c = {oxBlock + b.u * gxQBlock, ySurf + marbleR, ozBlock + b.v * gzQBlock};
+                    DrawSphere(c, marbleR * 0.88f, b.fill);
+                    DrawSphereWires(c, marbleR, 8, 12, b.wire);
+                }
+            }
+        } else if (storyStep == StoryStep::QaoaGateDemo) {
+            if (qMeshN > 0 && qaoaMeshAlpha > 0.02f) {
+                DrawQBlockMesh3D(surf, qBlockBaseI, qBlockBaseJ, qMeshN, oxBlock, ozBlock, gxQBlock, gzQBlock,
+                                 qaoaScaleDenSnap, ampBlock, qaoaMeshAlpha, qaoaMeshAlpha * 0.88f, 0.f, 1.f, 1.f,
+                                 qaoaEnergyAltSnap);
+            }
+            if (qMeshN > 0) {
+                const float marbleRDraw = std::max(0.04f, std::min(gxQBlock, gzQBlock) * 0.17f);
+                const auto drawMarbleA = [&](Vector3 c, float a, Color fill, Color wire) {
+                    if (a < 0.02f) {
+                        return;
+                    }
+                    Color f = fill;
+                    Color w = wire;
+                    f.a = static_cast<unsigned char>(std::round(static_cast<float>(f.a) * a));
+                    w.a = static_cast<unsigned char>(std::round(static_cast<float>(w.a) * a));
+                    DrawSphere(c, marbleRDraw * 0.88f, f);
+                    DrawSphereWires(c, marbleRDraw, 8, 12, w);
+                };
+                const Color fillD = {35, 120, 220, 230};
+                const Color wireD = {140, 210, 255, 255};
+                const Color fillO = {35, 140, 85, 230};
+                const Color wireO = {160, 240, 200, 255};
+                drawMarbleA(qaoaWorldD, qaoaSphereAD, fillD, wireD);
+                drawMarbleA(qaoaWorldO, qaoaSphereAO, fillO, wireO);
+                if (qaoaPh == QaoaStoryPhase::PickDiagonal || qaoaPh == QaoaStoryPhase::PickOffDiagonal) {
+                    const float pulse = 1.f + 0.14f * std::sin(static_cast<float>(GetTime()) * 6.8f);
+                    Color ring = {255, 230, 120, 200};
+                    if (qaoaPh == QaoaStoryPhase::PickDiagonal || qaoaSphereAD > 0.02f) {
+                        ring.a = static_cast<unsigned char>(
+                            std::round(static_cast<float>(ring.a) * qaoaSphereAD));
+                        DrawSphereWires(qaoaWorldD, marbleRDraw * pulse, 10, 14, ring);
+                    }
+                    if (qaoaPh == QaoaStoryPhase::PickOffDiagonal && qaoaSphereAO > 0.02f) {
+                        ring.a = static_cast<unsigned char>(
+                            std::round(static_cast<float>(ring.a) * qaoaSphereAO));
+                        DrawSphereWires(qaoaWorldO, marbleRDraw * pulse, 10, 14, ring);
+                    }
+                }
+                if (qaoaBoxAlpha > 0.02f) {
+                    Color boxFill = {18, 44, 92, static_cast<unsigned char>(qaoaBoxAlpha * 240.f)};
+                    Color boxWire = {0, 102, 204, static_cast<unsigned char>(qaoaBoxAlpha * 255.f)};
+                    rlPushMatrix();
+                    rlTranslatef(qaoaBoxPos.x, qaoaBoxPos.y, qaoaBoxPos.z);
+                    rlRotatef(qaoaBoxSpinAngle, 0.f, 1.f, 0.f);
+                    DrawCube({0.f, 0.f, 0.f}, qaoaBoxW, qaoaBoxH, qaoaBoxD, boxFill);
+                    DrawCubeWires({0.f, 0.f, 0.f}, qaoaBoxW, qaoaBoxH, qaoaBoxD, boxWire);
+                    rlPopMatrix();
+                }
+            }
         }
 
         EndMode3D();
+
+        if (storyStep == StoryStep::QaoaGateDemo && qMeshN > 0) {
+            if (qaoaBoxAlpha > 0.28f && PointInFrontOfCamera(qaoaBoxPos, camera)) {
+                Vector2 bs = GetWorldToScreen(qaoaBoxPos, camera);
+                if (OnScreen(bs, sw, sh, 140)) {
+                    const int fsQ = 22;
+                    const char* lab = "QAOA";
+                    const int tw = MeasureText(lab, fsQ);
+                    const unsigned char ba =
+                        static_cast<unsigned char>(std::min(255.f, qaoaBoxAlpha * 255.f));
+                    DrawText(lab, static_cast<int>(bs.x) - tw / 2, static_cast<int>(bs.y) - fsQ - 10, fsQ,
+                             {200, 230, 255, ba});
+                }
+            }
+            auto drawGateScreen = [&](const Vector3& w, const char* txt, float a) {
+                if (a < 0.04f || !PointInFrontOfCamera(w, camera)) {
+                    return;
+                }
+                Vector2 s = GetWorldToScreen(w, camera);
+                if (!OnScreen(s, sw, sh, 120)) {
+                    return;
+                }
+                const int fs = (txt[0] == 'Z' && txt[1] == 'Z' && txt[2] == '\0') ? 40 : 48;
+                const int tw = MeasureText(txt, fs);
+                const unsigned char aa = static_cast<unsigned char>(std::min(255.f, a * 255.f));
+                DrawText(txt, static_cast<int>(s.x) - tw / 2, static_cast<int>(s.y) - fs / 2, fs,
+                         {248, 252, 255, aa});
+            };
+            drawGateScreen(qaoaWorldD, "Z", qaoaGateLabelA);
+            drawGateScreen(qaoaWorldO, "ZZ", qaoaGateLabelA);
+            if (qaoaBundleAlpha > 0.02f) {
+                const double maxA = MaxAbsQSubmatrix(surf, qBlockBaseI, qBlockBaseJ, qMeshN);
+                const int risePx = static_cast<int>((1.f - qaoaBundleAlpha) * 48.f);
+                DrawQaoaBestBundlesMatrix2D(surf, qBlockBaseI, qBlockBaseJ, qMeshN, sw, sh, maxA, qaoaBundleAlpha,
+                                          risePx);
+            }
+        }
 
         if (storyStep == StoryStep::MarblesMcDecompose) {
             const float flashA = McMatrixLabelAlpha(mcPlayEntrance ? mcElapsed : 1.0e6f);
@@ -2800,40 +3602,9 @@ int main(int argc, char** argv) {
                 drawMcFlash("M", mcLabelWorldM, {230, 245, 255, 255});
                 drawMcFlash("C", mcLabelWorldC, g_style.depArrow);
             }
-            DrawText("M  — revenue-side base  price_i · margin_i · (1 − delta_m)", 380, 118, 15,
-                     (Color){100, 190, 255, 255});
-            Color ccCaption = g_style.depArrow;
-            DrawText("C  — contribution c_{i,m}  (includes take rate, affinity alpha, (1 + beta·delta))", 720, 118, 15,
-                     ccCaption);
         }
 
-        if (storyStep == StoryStep::MarblesMcMerge) {
-            McMergeStoryPhase capPh = McMergeStoryPhase::FadeOverlays;
-            float capMu = 0.f;
-            McMergeDecodePhase(mcMergePlayEntrance ? mcMergeElapsed : 1.0e6f, &capPh, &capMu);
-            unsigned char captionA = 255;
-            if (capPh == McMergeStoryPhase::FadeOverlays) {
-                captionA =
-                    static_cast<unsigned char>(std::round(255.f * (1.f - SmoothStep(capMu))));
-            }
-            if (captionA > 4) {
-                Color ml = {100, 190, 255, captionA};
-                DrawText("M  — revenue-side base  price_i · margin_i · (1 − delta_m)", 380, 118, 15, ml);
-                Color cl = g_style.depArrow;
-                cl.a = captionA;
-                DrawText("C  — contribution c_{i,m}  (includes take rate, affinity alpha, (1 + beta·delta))", 720, 118,
-                         15, cl);
-            }
-            unsigned char subA = 255;
-            if (capPh == McMergeStoryPhase::FadeOverlays) {
-                subA = static_cast<unsigned char>(std::round(255.f * SmoothStep(capMu)));
-            }
-            char mergeSub[220];
-            std::snprintf(mergeSub, sizeof(mergeSub),
-                          "Full Q coefficient grid %d×%d (%d coverages + %d slacks) — stack — merge to teal", surf.n,
-                          surf.n, surf.nCoverage, surf.nSlack);
-            DrawText(mergeSub, 120, 138, 13, (Color){145, 205, 210, subA});
-        }
+        DrawStoryMathPanel(storyStep, sw, sh, showLegend, showQMatrix, qLay, surf);
 
         if (haveQLabelWorld) {
             float qLabA = 0.f;
@@ -2871,7 +3642,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (storyStep == StoryStep::QBlockField) {
+        if (storyStep == StoryStep::QBlockField || storyStep == StoryStep::HamiltonianLandscape) {
             const Color diagLabelCol = {120, 220, 255, 255};
             const int labelFs = 12;
             for (int i = 0; i < qMeshN; i++) {
@@ -2912,29 +3683,7 @@ int main(int argc, char** argv) {
             DrawQMatrixPanel(surf, qLay, scaleDen, sw, sh, mouse);
         }
 
-        char hudA[320];
-        char hudB[320];
-        std::snprintf(
-            hudA, sizeof(hudA),
-            "QUBO BLOCK — package %d  (this bundle column only; not full multi-package Q)",
-            surf.packageIndex);
-        std::snprintf(hudB, sizeof(hudB),
-                      "n=%d (%d cov + %d slk)   3D block %d×%d @(%d,%d)   max|Q|=%.4g   const=%.4g",
-                      surf.n, surf.nCoverage, surf.nSlack, qMeshN, qMeshN, qBlockBaseI, qBlockBaseJ, scaleDen,
-                      surf.constantOffset);
-        DrawText(hudA, 20, 18, 17, RAYWHITE);
-        DrawText(hudB, 20, 40, 15, (Color){180, 190, 205, 255});
         if (surf.parametricLambda) {
-            char lamHud[280];
-            if (marginScaleEnabled) {
-                std::snprintf(lamHud, sizeof(lamHud),
-                              "λ = %.6g   s = %.6g   (diag: s·margin + λ·pen_ii; off-diag: λ·pen_ij)",
-                              surf.lambdaLive, marginScaleS);
-            } else {
-                std::snprintf(lamHud, sizeof(lamHud),
-                              "λ = %.6g   s = 1 (fixed)   press M to scale margin diagonal", surf.lambdaLive);
-            }
-            DrawText(lamHud, 20, 62, 13, (Color){100, 215, 195, 255});
             if (marginScaleEnabled) {
                 DrawText("Margin s (log — drag)   [M] off", static_cast<int>(kLambdaSliderScreenX),
                          static_cast<int>(marginSliderScreenY) - 20, 13, (Color){140, 175, 220, 255});
@@ -2957,58 +3706,22 @@ int main(int argc, char** argv) {
             DrawText(ends, static_cast<int>(kLambdaSliderScreenX + kLambdaSliderW + 12),
                      static_cast<int>(lambdaSliderScreenY + 1.f), 12,
                      (Color){120, 135, 155, 220});
-            DrawText(path, 20, 80, 15, GRAY);
+        }
+        if (storyStep == StoryStep::HamiltonianLandscape) {
+            DrawText("LMB drag: orbit   wheel: zoom   WASD: pan   SPACE: recenter   R: spin   I: legend   Q: matrix   "
+                     "M: margin   ← / → : story   B: reset marbles",
+                     20, sh - 28, 13, GRAY);
         } else {
-            DrawText(path, 20, 62, 15, GRAY);
-        }
-        DrawText(
-            "LMB: rotate   wheel: zoom   WASD: pan   SPACE: recenter   R: spin   I: info   Q: Print Q   "
-            "M: margin s   <- / -> : story (Story 7: → extrudes when flat)",
-            20, sh - 36, 15, GRAY);
-
-        {
-            const char* stepLabel = "";
-            if (storyStep == StoryStep::MarblesDropWhite) {
-                stepLabel = "Story 0: coverages drop (white) — press → for family colors";
-            } else if (storyStep == StoryStep::MarblesFamilyColor) {
-                stepLabel =
-                    "Story 1: tint → pause → slide to family clusters — → for dependency arrows "
-                    "(YQH26_data/instance_dependencies.csv)";
-            } else if (storyStep == StoryStep::MarblesDependencies) {
-                stepLabel =
-                    "Story 2: spread + requires→dependent arrows — → for incompatible pairs "
-                    "(instance_incompatible_pairs.csv)";
-            } else if (storyStep == StoryStep::MarblesIncompatibilities) {
-                stepLabel =
-                    "Story 3: optional add-on incompat pairs — red broken links — → bundler demo (pkg #2)";
-            } else if (storyStep == StoryStep::MarblesBundler) {
-                stepLabel =
-                    "Story 4: bundler — Suburban Homeowner — ✓ / allow / reject — → ILP M & C split";
-            } else if (storyStep == StoryStep::MarblesMcDecompose) {
-                stepLabel =
-                    "Story 5: M vs C matrices (pkg 2) — hemispheres → columns — → full ILP merge";
-            } else if (storyStep == StoryStep::MarblesMcMerge) {
-                stepLabel =
-                    "Story 6: n×n Q (cov+slack) — stack — merge teal + Q label — → slice to block";
-            } else if (storyStep == StoryStep::QSliceToBlock) {
-                stepLabel =
-                    "Story 7: slice Q — flat block when settled — press → to extrude (then Story 8)";
-            } else {
-                stepLabel = "Story 8: Q height field (extracted qMesh × qMesh)";
-            }
-            DrawText(stepLabel, 20, 104, 15, (Color){140, 200, 255, 255});
-        }
-
-        if (storyStep == StoryStep::QBlockField && !surf.x.empty()) {
-            char eh[160];
-            const double eSub = EnergySubBlock(surf, qBlockBaseI, qBlockBaseJ, qMeshN);
-            std::snprintf(eh, sizeof(eh), "E_sub on block ≈ %.6g  (full file E+const = %.6g)", eSub, Energy(surf));
-            DrawText(eh, 20, 126, 17, g_style.assignmentLine);
+            DrawText(
+                "LMB drag: orbit   wheel: zoom   WASD: pan   SPACE: recenter   R: spin   I: legend   Q: matrix   "
+                "M: margin   ← / → : story",
+                20, sh - 28, 13, GRAY);
         }
 
         EndDrawing();
     }
 
+    ShutdownStoryEquationFont();
     CloseWindow();
     return 0;
 }
