@@ -83,6 +83,8 @@ button {
 
 .collaboration-strip__logo--qgars {
   height: 22px;
+  filter: none;
+  opacity: 1;
 }
 
 .collaboration-strip__logo--ltm {
@@ -697,7 +699,7 @@ button {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .dataset-summary-grid-tight {
@@ -907,12 +909,12 @@ button {
 .name-pill {
   display: inline-flex;
   align-items: center;
-  min-height: 34px;
-  padding: 7px 11px;
+  min-height: 28px;
+  padding: 4px 8px;
   border-radius: 999px;
   background: rgba(0, 53, 107, 0.08);
   color: var(--yale-blue);
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-weight: 600;
   line-height: 1.25;
 }
@@ -1029,6 +1031,7 @@ button {
   background: var(--white);
   overflow: auto;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.04);
+  flex: 1;
 }
 
 .data-table {
@@ -1068,8 +1071,8 @@ button {
 
 .concise-family-table th,
 .concise-family-table td {
-  padding-top: 14px;
-  padding-bottom: 14px;
+  padding-top: 8px;
+  padding-bottom: 8px;
 }
 
 .concise-family-table td {

@@ -10,23 +10,23 @@ export const QAOA_PLOT_PUBLIC_PATHS = {
   histogram: "/plots/qaoa_p1_hist_gamma0.70_beta0.50_sh800.png"
 } as const;
 
-export type DashboardPlotId = "benchmark" | "histogram";
+export type DashboardPlotCategory = "Solution Quality" | "Workflow Cost" | "Hardware Resources" | "Constraint Handling";
 
 export type DashboardPlot = {
-  id: DashboardPlotId;
+  id: string;
+  category: DashboardPlotCategory;
   title: string;
   subtitle: string;
   src: string;
   alt: string;
-  /** Short lines shown under the thumbnail */
   summary: string[];
-  /** Full explanation in the lightbox */
   description: string[];
 };
 
 export const DASHBOARD_PLOTS: DashboardPlot[] = [
   {
     id: "benchmark",
+    category: "Workflow Cost",
     title: "Optimizer benchmark",
     subtitle:
       "p = 1 · mean objective · 256 shots/eval · pkg 0 · subsample 10×3 · grid 5×5 · rand 25 · COBYLA 40 · SPSA 25",
@@ -46,6 +46,7 @@ export const DASHBOARD_PLOTS: DashboardPlot[] = [
   },
   {
     id: "histogram",
+    category: "Solution Quality",
     title: "Energy histogram",
     subtitle: "γ = 0.70 rad · β = 0.50 rad · 800 shots · sample energy distribution",
     src: QAOA_PLOT_PUBLIC_PATHS.histogram,

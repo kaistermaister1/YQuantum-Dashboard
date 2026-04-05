@@ -1,5 +1,5 @@
 import Image from "next/image";
-import qgarsMark from "@/public/qgars-filled.png";
+import qgarsMark from "@/public/brand/qgars.png";
 import quantinuumMark from "@/subprojects/will/Travelers/docs/assets/logos/quantinuum-logo_horizontal_white.png";
 
 export function CollaborationStrip() {

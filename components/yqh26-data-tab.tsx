@@ -172,7 +172,7 @@ export function Yqh26DataTab({ dataset }: Yqh26DataTabProps) {
           </div>
         </article>
 
-        <article className="quick-list-card quick-list-card-sticky card-surface">
+        <article className="quick-list-card card-surface">
           <div className="bundles-head">
             <h3>Package Names</h3>
             <div className="bundle-toggle">

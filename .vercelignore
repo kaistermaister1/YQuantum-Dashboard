@@ -1,0 +1,7 @@
+.next
+node_modules
+.vercel
+.workspace-cache
+.cursor
+QGarsDashboard
+%TEMP%

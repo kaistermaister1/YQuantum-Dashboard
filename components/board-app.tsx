@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CollaborationStrip } from "@/components/collaboration-strip";
-import { PlotLightbox, QaoaPlotsTab, type DashboardPlot } from "@/components/qaoa-plots-tab";
+import { PlotLightbox, type DashboardPlot } from "@/components/qaoa-plots-tab";
 import { Yqh26DataTab } from "@/components/yqh26-data-tab";
+import { HeuristicsPlotsTab } from "@/components/heuristics-plots-tab";
 import {
   BoardCard,
   DeckKey,
@@ -18,7 +19,7 @@ import {
 import type { Yqh26DashboardData } from "@/lib/yqh26-data";
 
 type StorageMode = "local" | "remote";
-type ViewKey = "home" | "dataset" | "plots";
+type ViewKey = "home" | "dataset" | "heuristics";
 
 type BoardAppProps = {
   storageMode: StorageMode;
@@ -333,11 +334,15 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
             kicker: "Travelers Challenge Summary",
             quote: "Review the Travelers Challenge dataset summary, package structure, and family coverage details."
           }
-        : {
-            kicker: "QAOA pipeline · Plots",
-            quote:
-              "Browse benchmark and histogram figures from the local Selene-sim pipeline. Open a thumbnail for the full image and a plain-language reading guide."
-          };
+        : activeView === "heuristics"
+          ? {
+              kicker: "Heuristics Scaling Analysis",
+              quote: "Analyze solution quality, workflow cost, and constraint handling across problem sizes."
+            }
+          : {
+              kicker: "",
+              quote: ""
+            };
 
   return (
     <main className="page-shell">
@@ -346,7 +351,7 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
           <div className="page-header-layout">
             <div className="page-header-copy">
               <p className="page-kicker">{headerCopy.kicker}</p>
-              <h1>YQuantum 2026 Dashboard</h1>
+              <h1>QGars x Travelers 2026 - quantum advantage in optimization</h1>
               <p className="page-quote">{headerCopy.quote}</p>
             </div>
 
@@ -371,15 +376,15 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
               aria-current={activeView === "dataset" ? "page" : undefined}
               onClick={() => setActiveView("dataset")}
             >
-              YQH26 Summary
+              YQH26 Data
             </button>
             <button
               type="button"
-              className={`top-tab ${activeView === "plots" ? "top-tab-active" : ""}`}
-              aria-current={activeView === "plots" ? "page" : undefined}
-              onClick={() => setActiveView("plots")}
+              className={`top-tab ${activeView === "heuristics" ? "top-tab-active" : ""}`}
+              aria-current={activeView === "heuristics" ? "page" : undefined}
+              onClick={() => setActiveView("heuristics")}
             >
-              Plots
+              Heuristics Plots
             </button>
           </nav>
         </header>
@@ -495,11 +500,11 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
           <div className="dataset-wrap">
             <Yqh26DataTab dataset={dataset} />
           </div>
-        ) : (
+        ) : activeView === "heuristics" ? (
           <div className="dataset-wrap plots-wrap">
-            <QaoaPlotsTab onOpenPlot={setActivePlot} />
+            <HeuristicsPlotsTab onOpenPlot={setActivePlot} />
           </div>
-        )}
+        ) : null}
       </div>
 
       <PlotLightbox plot={activePlot} onClose={() => setActivePlot(null)} />
