@@ -5,6 +5,7 @@ import { CollaborationStrip } from "@/components/collaboration-strip";
 import { PlotLightbox, type DashboardPlot } from "@/components/qaoa-plots-tab";
 import { Yqh26DataTab } from "@/components/yqh26-data-tab";
 import { HeuristicsPlotsTab } from "@/components/heuristics-plots-tab";
+import { QuboVisLightbox } from "@/components/qubo-vis-tab";
 import {
   BoardCard,
   DeckKey,
@@ -120,6 +121,7 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
   const [activeDrop, setActiveDrop] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ViewKey>("home");
   const [activePlot, setActivePlot] = useState<DashboardPlot | null>(null);
+  const [showQuboVis, setShowQuboVis] = useState(false);
 
   async function syncRemoteBoard() {
     const response = await fetch("/api/board", { cache: "no-store" });
@@ -326,8 +328,7 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
     activeView === "home"
       ? {
           kicker: "Q-gars Workspace",
-          quote:
-            "Track team work across the board, then switch tabs to inspect the full YQH26 insurance bundling instance or QAOA result figures."
+          quote: "Quantum advantage in optimization"
         }
       : activeView === "dataset"
         ? {
@@ -351,7 +352,7 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
           <div className="page-header-layout">
             <div className="page-header-copy">
               <p className="page-kicker">{headerCopy.kicker}</p>
-              <h1>QGars x Travelers 2026 - quantum advantage in optimization</h1>
+              <h1>QGars x Travelers 2026</h1>
               <p className="page-quote">{headerCopy.quote}</p>
             </div>
 
@@ -385,6 +386,13 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
               onClick={() => setActiveView("heuristics")}
             >
               Heuristics Plots
+            </button>
+            <button
+              type="button"
+              className="top-tab"
+              onClick={() => setShowQuboVis(true)}
+            >
+              QUBO Visualizer
             </button>
           </nav>
         </header>
@@ -508,6 +516,7 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
       </div>
 
       <PlotLightbox plot={activePlot} onClose={() => setActivePlot(null)} />
+      <QuboVisLightbox isOpen={showQuboVis} onClose={() => setShowQuboVis(false)} />
 
       {activeView === "home" && cardModal ? (
         <div className="overlay" role="presentation" onClick={() => setCardModal(null)}>

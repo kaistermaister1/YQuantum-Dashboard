@@ -12,15 +12,16 @@ Simple five-deck kanban board built for `Team`, `Kai`, `Cayman`, `Peyton`, and `
 ## Local Development
 
 ```bash
+cd WEBPAGE
 npm install
 npm run dev
 ```
 
-The app now runs from the repository root and reads the YQH26 dataset from `subprojects/will/Travelers/docs/data/YQH26_data`.
+The app runs from `WEBPAGE/` and reads the YQH26 dataset from `../subprojects/will/Travelers/docs/data/YQH26_data`.
 
 ## Deploying on Vercel
 
-1. Import the repository in Vercel with the project root set to `.`
+1. Import the repository in Vercel with the project Root Directory set to `WEBPAGE`
 2. Add `DATABASE_URL` if you want shared board storage
 3. Deploy
 

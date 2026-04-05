@@ -1,25 +1,20 @@
-# YQuantum Dashboard
+# YQuantum
 
-This repository is organized for a root-level Vercel deployment.
+Live site: [yquant-qgars.vercel.app](https://yquant-qgars.vercel.app/)
 
-- Dashboard app: root-level Next.js project in `app/`, `components/`, `lib/`, and `public/`
-- Subprojects: `subprojects/` contains member-owned work
-- Docs: `docs/` contains the design brief and dashboard notes
+This repository is organized so GitHub visitors can quickly find the two main entry points:
 
-## Subprojects
+- `SOLUTIONS/` contains the core solution work, heuristics, experiments, and generated deliverables
+- `WEBPAGE/` contains the Next.js site that powers the live Vercel deployment
 
-- `subprojects/will/Travelers/` is the primary challenge-materials, data, and classical `code_examples` workspace
-- `subprojects/will/visualizations/qubo_vis/` is the C++ Raylib QUBO-block viewer (export script pulls data from `Travelers/docs/data/`)
-- `subprojects/will/qaoa_python/` is Will’s Python package (QAOA on `QuboBlock`, optimizers, tests) plus the Guppy notebook under `qaoa_python/notebooks/`
-- `subprojects/kai/` holds Kai's files
-- `subprojects/cayman/` holds Cayman's files
-- `subprojects/peyton/` holds Peyton's files
+Supporting material lives in:
 
-## Local Development
+- `subprojects/` for member-owned working folders and challenge-related material
+- `docs/` for project-facing notes and design guidance
+- `raylib/` for the upstream graphics dependency used by the visualization work
 
-```bash
-npm install
-npm run dev
-```
+## Where To Look
 
-The dashboard reads YQH26 data from `subprojects/will/Travelers/docs/data/YQH26_data`.
+- Start in `SOLUTIONS/` if you want the main implementation and outputs
+- Open `WEBPAGE/` if you want the live site source
+- Visit [yquant-qgars.vercel.app](https://yquant-qgars.vercel.app/) for the deployed experience

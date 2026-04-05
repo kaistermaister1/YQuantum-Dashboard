@@ -173,7 +173,7 @@ def row_values(r: dict[str, str] | None) -> tuple[str, str, str]:
     rt = _f(r, "runtime_sec")
     shots = _i(r, "num_samples_total")
     algo = (r.get("algorithm") or "").strip()
-    cost = fmt_shots(shots) if algo == "qaoa" and shots is not None else "—"
+    cost = fmt_shots(shots) if algo in ("qaoa", "dqi") and shots is not None else "—"
     return (fmt_profit(profit), fmt_runtime_sec(rt), cost)
 
 
@@ -349,7 +349,7 @@ def main() -> None:
     title_lines = [
         f"Algorithm comparison (n={args.n}, m={args.m}, p={args.p})",
         f"Fixed λ = {lambda_display(lambda_target)}  ·  QAOA columns: SPSA and COBYLA (same λ, local)",
-        "Optimal price / margin = best_profit (contribution margin, USD). Cost = total measurement shots for QAOA (num_samples_total).",
+        "Optimal price / margin = best_profit (contribution margin, USD). Cost = total measurement shots (num_samples_total) for QAOA and DQI when recorded.",
         f"classical: {meta['classical_run_id'] or '—'}  ·  qaoa_spsa: {meta['qaoa_spsa_run_id'] or '—'}  ·  qaoa_cobyla: {meta['qaoa_cobyla_run_id'] or '—'}  ·  dqi: {meta['dqi_run_id'] or '—'}",
     ]
 

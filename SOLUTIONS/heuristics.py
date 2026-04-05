@@ -21,11 +21,11 @@ import qaoa_selene
 from qaoa_plots import save_training_loss_plot
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DQI_ADAPTER_ROOT = REPO_ROOT / "subprojects" / "kai" / "kai-dqi"
-if str(DQI_ADAPTER_ROOT) not in sys.path:
-    sys.path.insert(0, str(DQI_ADAPTER_ROOT))
+CAYMAN_ROOT = REPO_ROOT / "subprojects" / "cayman"
+if str(CAYMAN_ROOT) not in sys.path:
+    sys.path.insert(0, str(CAYMAN_ROOT))
 
-import travelers_dqi
+from src.dqi_classic_pipeline import run_classic_dqi
 
 OUTPUT_ROOT = Path(__file__).resolve().parent / "HEURISTICS"
 SUMMARIES_DIR = OUTPUT_ROOT / "summaries"
@@ -45,6 +45,16 @@ SEED = 0
 GENERATE_TRAINING_LOSS_PLOT = False
 # On Selene, subsamples with N×M at or below this use regular SPSA/COBYLA unless --force-fast-selene.
 SELENE_FAST_SELENE_MIN_NM = 41
+DQI_BP_MODE = "BP1"
+DQI_OBJECTIVE_MODE = "compressed"
+DQI_OBJECTIVE_SCALE = 1
+DQI_OBJECTIVE_TARGET_MAX = 0
+DQI_ELL = 1
+DQI_BP_ITERATIONS = 1
+DQI_TRY_QUANTUM = False
+DQI_QUANTUM_ROW_LIMIT = 0
+DQI_SHOTS = 4096
+DQI_STRICT_ANCILLA = True
 
 SUMMARY_FIELDS = [
     "run_id",
@@ -282,24 +292,143 @@ def _qaoa_resource_fields(block: qaoa.QuboBlock, p: int) -> tuple[int, str, int]
     return block.n_vars, "", int(p) * len(zz_terms)
 
 
-def _extract_dqi_solution_matrix(
-    workflow_result: travelers_dqi.DqiWorkflowResult,
-    problem,
-) -> tuple[np.ndarray, bool]:
-    x_matrix = np.full((problem.N, problem.M), -1, dtype=int)
-    all_packages_have_assignments = True
-    for block in workflow_result.blocks:
-        assignment = block.quantum_best_semantic_assignment
-        if assignment is None:
-            all_packages_have_assignments = False
+def _build_relaxed_dqi_parity_system(
+    problem: qaoa.BundlingProblem,
+    block: qaoa.QuboBlock,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Mirror the exact relaxed slack layout used by ``qaoa.build_qubo_block_for_package``."""
+    if int(block.n_coverage) != int(problem.N):
+        raise ValueError(
+            f"block coverage count {block.n_coverage} does not match problem size {problem.N}",
+        )
+
+    n_coverage = int(problem.N)
+    max_qubits = int(block.max_qubits) if block.max_qubits is not None else int(qaoa.MAX_QUBITS)
+    slack_budget = max_qubits - n_coverage
+    if slack_budget < 0:
+        raise ValueError(
+            f"block slack budget is negative: max_qubits={max_qubits}, n_coverage={n_coverage}",
+        )
+
+    capacity_bits = max(1, int(np.ceil(np.log2(problem.max_options_per_package + 1))))
+    reserved_slack = 0
+    encoded_optional_families: list[list[int]] = []
+    encoded_dependency_rules: list[qaoa.DependencyRule] = []
+    encoded_incompatibility_rules: list[qaoa.CompatibilityRule] = []
+
+    def can_allocate(n_bits: int) -> bool:
+        return reserved_slack + int(n_bits) <= slack_budget
+
+    def reserve(n_bits: int) -> None:
+        nonlocal reserved_slack
+        reserved_slack += int(n_bits)
+
+    for indices in problem.optional_families.values():
+        if len(indices) <= 1:
             continue
-        for coverage_index in range(problem.N):
-            key = f"x_{coverage_index}"
-            if key in assignment:
-                x_matrix[coverage_index, block.package_index] = int(assignment[key])
-            else:
-                all_packages_have_assignments = False
-    return x_matrix, all_packages_have_assignments
+        if can_allocate(1):
+            reserve(1)
+            encoded_optional_families.append(list(indices))
+
+    capacity_constraint_encoded = can_allocate(capacity_bits)
+    if capacity_constraint_encoded:
+        reserve(capacity_bits)
+
+    for rule in problem.dependency_rules:
+        if can_allocate(1):
+            reserve(1)
+            encoded_dependency_rules.append(rule)
+
+    for rule in problem.compatibility_rules:
+        if rule.compatible:
+            continue
+        if can_allocate(1):
+            reserve(1)
+            encoded_incompatibility_rules.append(rule)
+
+    if reserved_slack != int(block.n_slack):
+        raise ValueError(
+            "Relaxed DQI parity adapter disagrees with qaoa block slack layout: "
+            f"expected {block.n_slack}, reconstructed {reserved_slack}",
+        )
+
+    rows: list[list[int]] = []
+    rhs_values: list[int] = []
+
+    def add_row(columns: list[int], rhs: int) -> None:
+        rows.append(columns)
+        rhs_values.append(int(rhs) & 1)
+
+    for indices in problem.mandatory_families.values():
+        add_row(list(indices), 1)
+
+    assigned_slack = 0
+
+    def next_slack(n_bits: int) -> list[int]:
+        nonlocal assigned_slack
+        start = n_coverage + assigned_slack
+        indices = list(range(start, start + int(n_bits)))
+        assigned_slack += int(n_bits)
+        return indices
+
+    for indices in encoded_optional_families:
+        slack_index = next_slack(1)[0]
+        add_row(list(indices) + [slack_index], 1)
+
+    if capacity_constraint_encoded:
+        cap_slacks = next_slack(capacity_bits)
+        add_row(list(range(n_coverage)) + [cap_slacks[0]], int(problem.max_options_per_package) & 1)
+
+    for rule in encoded_incompatibility_rules:
+        i = problem.coverage_index(rule.coverage_i)
+        j = problem.coverage_index(rule.coverage_j)
+        slack_index = next_slack(1)[0]
+        add_row([i, j, slack_index], 1)
+
+    for rule in encoded_dependency_rules:
+        i = problem.coverage_index(rule.requires)
+        j = problem.coverage_index(rule.dependent)
+        slack_index = next_slack(1)[0]
+        add_row([i, j, slack_index], 0)
+
+    if assigned_slack != int(block.n_slack):
+        raise ValueError(
+            "Relaxed DQI parity adapter assigned the wrong number of slack variables: "
+            f"expected {block.n_slack}, assigned {assigned_slack}",
+        )
+
+    B = np.zeros((len(rows), int(block.n_vars)), dtype=np.uint8)
+    for row_index, columns in enumerate(rows):
+        for column_index in columns:
+            B[row_index, column_index] ^= 1
+    rhs = np.asarray(rhs_values, dtype=np.uint8)
+    return B, rhs
+
+
+def _select_dqi_coverage_bits(
+    block: qaoa.QuboBlock,
+    postselected_counts: dict[str, int],
+    n_coverage: int,
+) -> np.ndarray | None:
+    best_bitstring = ""
+    best_energy = float("inf")
+    best_count = -1
+    for bitstring, count in postselected_counts.items():
+        if len(bitstring) != int(block.n_vars):
+            continue
+        bits = np.array([int(char) for char in bitstring], dtype=int)
+        energy = float(block.energy(bits))
+        if (
+            energy < best_energy - 1e-12
+            or (abs(energy - best_energy) <= 1e-12 and int(count) > best_count)
+            or (abs(energy - best_energy) <= 1e-12 and int(count) == best_count and bitstring < best_bitstring)
+        ):
+            best_energy = energy
+            best_count = int(count)
+            best_bitstring = bitstring
+    if not best_bitstring:
+        return None
+    return np.array([int(char) for char in best_bitstring[:n_coverage]], dtype=int)
 
 
 def _run_classical(
@@ -702,115 +831,146 @@ def _run_dqi(
     bp_iterations: int,
     try_quantum: bool,
     quantum_row_limit: int,
+    shots: int,
+    strict_ancilla: bool,
     summaries_dir: Path,
     histories_dir: Path,
     solutions_dir: Path,
 ) -> dict[str, Any]:
-    if bp_mode not in {"BP1", "BP2"}:
-        raise ValueError("bp_mode must be 'BP1' or 'BP2'")
-
     workflow_start = time.perf_counter()
-    problem = travelers_dqi.subsample_problem(
-        travelers_dqi.load_ltm_instance(travelers_dqi.DATA_DIR),
+    problem = qaoa.subsample_problem(
+        qaoa.load_ltm_instance(qaoa.DATA_DIR),
         n_coverages=n,
-        n_packages=m,
+        m_packages=m,
     )
-    workflow_result = travelers_dqi.solve_dqi_workflow(
-        n=n,
-        m=m,
-        objective_mode=objective_mode,
-        objective_scale=objective_scale,
-        objective_target_max=objective_target_max,
-        bp_mode=bp_mode,
-        ell=ell,
-        bp_iterations=bp_iterations,
-        seed=seed,
-        try_quantum=try_quantum,
-        quantum_row_limit=quantum_row_limit,
-    )
-    runtime_sec = time.perf_counter() - workflow_start
+    blocks = [qaoa.build_qubo_block_for_package(problem, package_index) for package_index in range(problem.M)]
     classical_opt = classical_baseline.solve_classical_baseline(n=n, m=m)
+    is_feasible = _build_feasibility_checker(problem)
+    coverage_names = [coverage.name for coverage in problem.coverages]
+    package_names = problem.package_names or [f"package {index + 1}" for index in range(problem.M)]
+    x_matrix = np.full((problem.N, problem.M), -1, dtype=int)
+    lambda_values = [block.penalty_weight for block in blocks]
+
+    history_rows: list[dict[str, Any]] = []
+    num_samples_total = 0
+    num_samples_postselected = 0
+    num_samples_feasible = 0
+    max_num_qubits = 0
+
+    for package_index, block in enumerate(blocks):
+        B, rhs = _build_relaxed_dqi_parity_system(problem, block)
+        result = run_classic_dqi(
+            B,
+            rhs,
+            ell=int(ell),
+            bp_iterations=int(bp_iterations),
+            shots=int(shots),
+            seed=int(seed) + package_index * 1000,
+            strict_ancilla=bool(strict_ancilla),
+        )
+        num_samples_total += int(result.total_shots)
+        num_samples_postselected += int(result.postselected_shots)
+        max_num_qubits = max(max_num_qubits, int(result.num_qubits))
+        num_samples_feasible += _count_feasible_samples(result.postselected_counts, problem.N, is_feasible)
+
+        best_coverage_bits = _select_dqi_coverage_bits(block, result.postselected_counts, problem.N)
+        if best_coverage_bits is not None:
+            x_matrix[:, package_index] = best_coverage_bits
+
+        assignment = (
+            {f"x_{coverage_index}": int(value) for coverage_index, value in enumerate(best_coverage_bits.tolist())}
+            if best_coverage_bits is not None
+            else None
+        )
+        note_parts = [
+            "cayman classic parity-native DQI",
+            f"keep_rate={float(result.keep_rate):.6f}",
+            f"strict_ancilla={int(bool(strict_ancilla))}",
+            block.constraint_budget_summary(),
+        ]
+        if int(result.postselected_shots) == 0:
+            note_parts.append("no postselected shots survived")
+
+        history_rows.append(
+            {
+                "run_id": "",
+                "algorithm": "dqi",
+                "bp_mode": "classic_relaxed",
+                "package_index": int(package_index),
+                "package_name": package_names[package_index],
+                "objective_mode": "relaxed_parity",
+                "objective_lower_bound": "",
+                "expanded_num_vars": int(block.n_vars),
+                "num_constraints": int(B.shape[0]),
+                "B_rows": int(B.shape[0]),
+                "B_cols": int(B.shape[1]),
+                "ell": int(result.ell),
+                "dqi_expected_f": float(result.expected_f) if result.expected_f is not None else "",
+                "dqi_expected_s": float(result.expected_s) if result.expected_s is not None else "",
+                "quantum_attempted": 0,
+                "quantum_ran": 0,
+                "quantum_postselected_shots": int(result.postselected_shots),
+                "quantum_best_assignment": json.dumps(assignment, sort_keys=True) if assignment is not None else "",
+                "note": "; ".join(note_parts),
+            }
+        )
+
+    runtime_sec = time.perf_counter() - workflow_start
 
     run_id = _build_run_id(
         "dqi",
         n=n,
         m=m,
-        p=workflow_result.ell,
-        target="analytic",
-        optimizer=bp_mode.lower(),
+        p=ell,
+        target="classic",
+        optimizer="relaxed",
+        lambda_token=_build_lambda_token(lambda_values),
     )
     stem = run_id
 
-    x_matrix, has_complete_solution = _extract_dqi_solution_matrix(workflow_result, problem)
-    coverage_names = [coverage.name for coverage in problem.coverages]
-    package_names = problem.package_names or [f"package {index + 1}" for index in range(problem.M)]
+    for row in history_rows:
+        row["run_id"] = run_id
+
+    has_complete_solution = bool(np.all(x_matrix >= 0))
     solution_path = _write_solution_matrix_csv(
         _path_for_csv(solutions_dir, f"{stem}_solution"),
         matrix=x_matrix,
         coverage_names=coverage_names,
         package_names=package_names,
     )
-
-    history_rows: list[dict[str, Any]] = []
-    for block in workflow_result.blocks:
-        history_rows.append(
-            {
-                "run_id": run_id,
-                "algorithm": "dqi",
-                "bp_mode": bp_mode,
-                "package_index": int(block.package_index),
-                "package_name": block.package_name,
-                "objective_mode": workflow_result.objective_mode,
-                "objective_lower_bound": int(block.objective_lower_bound),
-                "expanded_num_vars": int(block.expanded_num_vars),
-                "num_constraints": int(block.num_constraints),
-                "B_rows": int(block.B_shape[0]),
-                "B_cols": int(block.B_shape[1]),
-                "ell": int(block.ell),
-                "dqi_expected_f": float(block.dqi_expected_f) if block.dqi_expected_f is not None else "",
-                "dqi_expected_s": float(block.dqi_expected_s) if block.dqi_expected_s is not None else "",
-                "quantum_attempted": int(bool(block.quantum_attempted)),
-                "quantum_ran": int(bool(block.quantum_ran)),
-                "quantum_postselected_shots": (
-                    int(block.quantum_postselected_shots)
-                    if block.quantum_postselected_shots is not None
-                    else ""
-                ),
-                "quantum_best_assignment": (
-                    json.dumps(block.quantum_best_semantic_assignment, sort_keys=True)
-                    if block.quantum_best_semantic_assignment is not None
-                    else ""
-                ),
-                "note": block.note,
-            }
-        )
     history_path = _write_csv_rows(
         _path_for_csv(histories_dir, f"{stem}_history"),
         DQI_HISTORY_FIELDS,
         history_rows,
     )
 
-    postselected_total = sum(
-        int(block.quantum_postselected_shots)
-        for block in workflow_result.blocks
-        if block.quantum_postselected_shots is not None
-    )
-    objective_eval_count = len(workflow_result.blocks)
+    objective_eval_count = len(blocks)
 
     best_profit: float | str = ""
     if has_complete_solution:
-        c_matrix = np.array(workflow_result.c_im_float, dtype=float)
-        mask = np.clip(x_matrix, 0, 1)
-        best_profit = float(np.sum(c_matrix * mask))
+        c_matrix = qaoa.make_c_matrix(problem)
+        best_profit = float(np.sum(c_matrix * x_matrix))
 
     notes_parts = [
-        f"bp_mode={bp_mode}",
-        f"objective_mode={workflow_result.objective_mode}",
+        "cayman classic parity-native DQI on relaxed package-local QUBO blocks",
         f"bp_iterations={bp_iterations}",
-        f"try_quantum={int(bool(try_quantum))}",
-        "solution matrix uses -1 where no quantum semantic assignment was available",
-        "analytic DQI estimates come from the patched package-local max-XOR workflow",
+        f"ell={ell}",
+        f"shots_per_package={shots}",
+        f"strict_ancilla={int(bool(strict_ancilla))}",
+        f"legacy_bp_mode={bp_mode}",
+        f"legacy_objective_mode={objective_mode}",
+        f"legacy_objective_scale={objective_scale}",
+        f"legacy_objective_target_max={objective_target_max}",
+        f"legacy_try_quantum={int(bool(try_quantum))}",
+        f"legacy_quantum_row_limit={quantum_row_limit}",
+        "legacy travelers_dqi options are retained for CLI compatibility and ignored by this adapter",
+        "solution matrix uses -1 where no postselected relaxed DQI assignment was available",
+        "relaxed parity rows mirror only the constraints actually encoded in each package-local QUBO block",
     ]
+    relaxed_notes = _relaxed_block_notes(blocks)
+    if relaxed_notes:
+        notes_parts.append("constraint priority relaxation enabled to fit MAX_QUBITS")
+        notes_parts.extend(relaxed_notes)
     if not has_complete_solution:
         notes_parts.append(
             "best_profit left blank because the current DQI run did not yield a complete package matrix",
@@ -819,21 +979,21 @@ def _run_dqi(
     summary_row = {
         "run_id": run_id,
         "algorithm": "dqi",
-        "optimizer": bp_mode,
+        "optimizer": "classic_relaxed",
         "seed": int(seed),
         "N_local": int(problem.N),
         "M_blocks": int(problem.M),
         "n_total": int(problem.N) * int(problem.M),
-        "p": int(workflow_result.ell),
-        "lambda": "",
+        "p": int(ell),
+        "lambda": _format_lambda_field(lambda_values),
         "runtime_sec": float(runtime_sec),
         "best_profit": best_profit,
         "classical_opt_profit": float(classical_opt["profit"]),
-        "num_samples_total": "",
-        "num_samples_feasible": "",
-        "num_samples_postselected": int(postselected_total),
+        "num_samples_total": int(num_samples_total),
+        "num_samples_feasible": int(num_samples_feasible),
+        "num_samples_postselected": int(num_samples_postselected),
         "num_objective_evals": int(objective_eval_count),
-        "num_qubits": "",
+        "num_qubits": int(max_num_qubits) if max_num_qubits else "",
         "circuit_depth": "",
         "two_qubit_gate_count": "",
         "solution_path": _path_to_repo_relative_string(solution_path),
@@ -869,6 +1029,20 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--dqi-bp-iterations", type=int, default=DQI_BP_ITERATIONS)
     parser.add_argument("--dqi-try-quantum", type=int, default=int(DQI_TRY_QUANTUM), choices=[0, 1])
     parser.add_argument("--dqi-quantum-row-limit", type=int, default=DQI_QUANTUM_ROW_LIMIT)
+    parser.add_argument(
+        "--dqi-shots",
+        type=int,
+        default=DQI_SHOTS,
+        metavar="N",
+        help="Shots per package for Cayman classic relaxed DQI.",
+    )
+    parser.add_argument(
+        "--dqi-strict-ancilla",
+        type=int,
+        default=int(DQI_STRICT_ANCILLA),
+        choices=[0, 1],
+        help="Require clean ancilla measurements for Cayman classic relaxed DQI post-selection.",
+    )
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument(
         "--compact-qubo",
@@ -961,6 +1135,8 @@ def main(argv: Sequence[str] | None = None) -> dict[str, Any]:
             bp_iterations=args.dqi_bp_iterations,
             try_quantum=bool(args.dqi_try_quantum),
             quantum_row_limit=args.dqi_quantum_row_limit,
+            shots=args.dqi_shots,
+            strict_ancilla=bool(args.dqi_strict_ancilla),
             summaries_dir=SUMMARIES_DIR,
             histories_dir=HISTORIES_DIR,
             solutions_dir=SOLUTIONS_DIR,

@@ -13,6 +13,6 @@ guppylang
 hugr>=0.14,<0.16
 # Nexus client for default DQI execution (must resolve with hugr<0.16 above).
 qnexus>=0.38,<0.42
-# Optional: dqi-main-compatible BP pipeline (local simulation path).
-# qiskit
-# qiskit-aer
+# BP-decoder / Qiskit path (local simulation; used by run_cayman_dqi_for_algorithm_comparison.py).
+qiskit>=1.0
+qiskit-aer>=0.13
