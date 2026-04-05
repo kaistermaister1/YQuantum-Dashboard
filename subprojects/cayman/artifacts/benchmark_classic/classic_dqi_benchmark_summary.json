@@ -1,0 +1,52 @@
+[
+  {
+    "n": 10,
+    "n_vars": 15,
+    "n_checks": 5,
+    "package": 0,
+    "classic_dqi": {
+      "expected_s": 3.4889380530973453,
+      "expected_f": 1.9778761061946903,
+      "keep_rate": 0.8828125,
+      "postselected_shots": 452,
+      "total_shots": 512,
+      "runtime_s": 2.687982200004626,
+      "cost": 512,
+      "num_qubits": 33
+    },
+    "random_uniform": {
+      "expected_s": 2.54296875,
+      "expected_f": 0.0859375,
+      "runtime_s": 0.03870430000824854,
+      "cost": 512
+    },
+    "bruteforce": {
+      "best_f": 5.0,
+      "best_s": 5.0,
+      "runtime_s": 0.8202213000040501
+    }
+  },
+  {
+    "n": 20,
+    "n_vars": 39,
+    "n_checks": 19,
+    "package": 0,
+    "classic_dqi": {
+      "expected_s": 11.59920634920635,
+      "expected_f": 4.198412698412699,
+      "keep_rate": 0.984375,
+      "postselected_shots": 504,
+      "total_shots": 512,
+      "runtime_s": 12.135070799966343,
+      "cost": 512,
+      "num_qubits": 87
+    },
+    "random_uniform": {
+      "expected_s": 9.384765625,
+      "expected_f": -0.23046875,
+      "runtime_s": 0.04790459998184815,
+      "cost": 512
+    },
+    "bruteforce": null
+  }
+]
