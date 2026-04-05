@@ -107,6 +107,12 @@ def _run_sources_on_selene(
     seed: int,
     job_label: str,
 ) -> list[base_qaoa.QaoaSampleStats]:
+    if block.n_vars > base_qaoa.SELENE_STATEVECTOR_MAX_QUBITS:
+        raise ValueError(
+            f"Block uses {block.n_vars} qubits; Nexus Selene statevector allows at most "
+            f"{base_qaoa.SELENE_STATEVECTOR_MAX_QUBITS} per program. "
+            f"Use heuristics --target local for larger blocks, or reduce --n."
+        )
     if block.n_vars > MAX_QUBITS:
         raise ValueError(f"Block uses {block.n_vars} qubits, which exceeds MAX_QUBITS={MAX_QUBITS}")
 
@@ -356,6 +362,100 @@ def optimize_block_spsa_selene(
     _log(
         f"[package {block.package_index + 1}] Selene SPSA finished after "
         f"{len(trace.objective_values)} evaluations with best_mean={best_objective:.6f}"
+    )
+    return base_qaoa.QaoaOptimizationResult(theta=best_theta, stats=best_stats, trace=trace)
+
+
+def optimize_block_batched_theta_search_selene(
+    session: SeleneSession,
+    block: base_qaoa.QuboBlock,
+    p: int,
+    shots: int,
+    seed: int,
+    *,
+    n_trials: int,
+    strategy: str = "random",
+    evaluation_callback: base_qaoa.QaoaEvaluationCallback | None = None,
+) -> base_qaoa.QaoaOptimizationResult:
+    """Many QAOA angles in one Nexus ``execute`` (one round-trip), then pick best mean energy.
+
+    ``strategy`` is ``\"random\"`` (``n_trials`` draws from :math:`[0,\\pi]^{2p}`) or ``\"grid\"``
+    (3×3 :math:`\\gamma,\\beta` grid; requires ``p == 1``; ``n_trials`` is ignored).
+    """
+    c_z, zz_terms = base_qaoa.qubo_to_ising_pauli_coefficients(block.Q)
+    thetas: list[np.ndarray] = []
+    if strategy == "grid":
+        if p != 1:
+            raise ValueError("batched grid search requires p=1")
+        for gamma in (0.0, math.pi / 4.0, math.pi / 2.0):
+            for beta in (0.0, math.pi / 4.0, math.pi / 2.0):
+                thetas.append(base_qaoa._clip_theta(np.array([gamma, beta], dtype=float)))
+    elif strategy == "random":
+        if n_trials < 1:
+            raise ValueError("n_trials must be at least 1")
+        rng = np.random.default_rng(seed)
+        for _ in range(int(n_trials)):
+            raw = rng.uniform(0.0, math.pi, size=2 * p)
+            thetas.append(base_qaoa._clip_theta(raw))
+    else:
+        raise ValueError("strategy must be 'random' or 'grid'")
+
+    sources: list[str] = []
+    for theta in thetas:
+        gammas, betas = base_qaoa._split_theta(theta, p)
+        sources.append(base_qaoa._build_qaoa_source(c_z, zz_terms, gammas, betas))
+
+    n_programs = len(sources)
+    _log(
+        f"[package {block.package_index + 1}] Selene batched θ search ({strategy}): "
+        f"{n_programs} circuits in one execute(), p={p}, shots={shots}"
+    )
+    batch_start = time.perf_counter()
+    stats_list = _run_sources_on_selene(
+        session=session,
+        block=block,
+        sources=sources,
+        shots=shots,
+        seed=seed,
+        job_label=f"Selene batched {strategy}",
+    )
+    batch_elapsed = time.perf_counter() - batch_start
+
+    trace = base_qaoa.QaoaOptimizationTrace()
+    best_objective = float("inf")
+    best_theta = thetas[0].copy()
+    best_stats = stats_list[0]
+    for i, (theta, stats) in enumerate(zip(thetas, stats_list, strict=True)):
+        value = base_qaoa._mean_sample_energy(block, stats)
+        improved = value < best_objective
+        if improved:
+            best_objective = value
+            best_theta = theta.copy()
+            best_stats = stats
+        trace.record(value, best_stats=best_stats, improved=improved)
+        base_qaoa._emit_evaluation_callback(
+            evaluation_callback,
+            block,
+            i + 1,
+            value,
+            best_objective,
+            stats,
+            improved,
+        )
+        elapsed_note = batch_elapsed if i == 0 else 0.0
+        base_qaoa._report_evaluation(
+            block,
+            i + 1,
+            value,
+            best_objective,
+            stats,
+            elapsed_note,
+            note=f"batched {strategy}" + (" new best" if improved else ""),
+        )
+
+    _log(
+        f"[package {block.package_index + 1}] Batched θ search done: best_mean={best_objective:.6f} "
+        f"({n_programs} evals, {batch_elapsed:.2f}s wall)"
     )
     return base_qaoa.QaoaOptimizationResult(theta=best_theta, stats=best_stats, trace=trace)
 

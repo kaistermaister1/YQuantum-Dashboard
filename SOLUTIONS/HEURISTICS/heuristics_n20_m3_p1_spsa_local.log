@@ -1,0 +1,50 @@
+[package 1] Starting SPSA on 39 qubits (20 coverage + 19 slack), shots=256, maxiter=40
+Traceback (most recent call last):
+  File "/Users/willott/School/RESEARCH/YQuantum/SOLUTIONS/heuristics.py", line 531, in <module>
+    main()
+    ~~~~^^
+  File "/Users/willott/School/RESEARCH/YQuantum/SOLUTIONS/heuristics.py", line 517, in main
+    return _run_qaoa(
+        n=args.n,
+    ...<7 lines>...
+        solutions_dir=SOLUTIONS_DIR,
+    )
+  File "/Users/willott/School/RESEARCH/YQuantum/SOLUTIONS/heuristics.py", line 406, in _run_qaoa
+    result = qaoa.optimize_block(
+        block,
+    ...<4 lines>...
+        evaluation_callback=on_evaluation,
+    )
+  File "/Users/willott/School/RESEARCH/YQuantum/SOLUTIONS/qaoa.py", line 907, in optimize_block
+    return optimize_block_spsa(
+        block,
+    ...<4 lines>...
+        evaluation_callback=evaluation_callback,
+    )
+  File "/Users/willott/School/RESEARCH/YQuantum/SOLUTIONS/qaoa.py", line 799, in optimize_block_spsa
+    stats_plus = _run_qaoa_on_block(
+        block,
+    ...<4 lines>...
+        execution_target=execution_target,
+    )
+  File "/Users/willott/School/RESEARCH/YQuantum/SOLUTIONS/qaoa.py", line 653, in _run_qaoa_on_block
+    return _run_qaoa_locally(block, source, shots=shots, seed=seed)
+  File "/Users/willott/School/RESEARCH/YQuantum/SOLUTIONS/qaoa.py", line 267, in _run_qaoa_locally
+    result = emulator.run()
+  File "/Users/willott/School/RESEARCH/YQuantum/.venv/lib/python3.14/site-packages/guppylang/emulator/instance.py", line 228, in run
+    raise EmulatorError(
+    ...<3 lines>...
+    ) from None
+guppylang.emulator.exceptions.EmulatorError: Parsing error: Unexpected end of stream
+----- stderr -----
+-----------------------------------
+Unable to determine available memory due to system limitations.
+QuEST is going to try to allocate 8.0 TiB of memory to
+store the statevector, and this will be multiplied by the number
+of processes if running in multiprocessing mode.
+
+If this fails, verify that your system has sufficient memory.
+-----------------------------------
+
+------------------
+

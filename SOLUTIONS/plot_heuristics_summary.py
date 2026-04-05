@@ -108,12 +108,17 @@ def collect_settings_from_rows(rs: list[dict[str, str]]) -> dict[str, Any]:
     }
 
 
-def load_qaoa_rows(path: Path) -> list[dict[str, str]]:
+def load_qaoa_rows(path: Path, *, exclude_optimizers: frozenset[str] | None = None) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
+    skip = exclude_optimizers or frozenset()
     with path.open(newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
-            if row.get("algorithm", "").strip() == "qaoa":
-                rows.append(row)
+            if row.get("algorithm", "").strip() != "qaoa":
+                continue
+            opt = (row.get("optimizer") or "").strip().lower()
+            if opt in skip:
+                continue
+            rows.append(row)
     return rows
 
 
@@ -388,9 +393,20 @@ def main() -> None:
         default="heuristics_summary_v1.png",
         help="Filename for the combined figure (written under --out-dir).",
     )
+    parser.add_argument(
+        "--exclude-optimizer",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help=(
+            "Omit QAOA rows with this optimizer (repeatable), e.g. --exclude-optimizer random_batch "
+            "for a local COBYLA/SPSA-only figure."
+        ),
+    )
     args = parser.parse_args()
 
-    rows = load_qaoa_rows(args.summaries)
+    exclude = frozenset(x.strip().lower() for x in args.exclude_optimizer if x.strip())
+    rows = load_qaoa_rows(args.summaries, exclude_optimizers=exclude if exclude else None)
     if not rows:
         raise SystemExit(f"No qaoa rows found in {args.summaries}")
 

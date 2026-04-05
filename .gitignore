@@ -27,6 +27,9 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+# Heuristics: local Zig cache for Guppy builds (set ZIG_GLOBAL_CACHE_DIR here)
+.zig-cache-heuristics/
+
 # cayman: local benchmark / scratch output (regenerate with scripts)
 subprojects/cayman/artifacts/benchmark_official/
 subprojects/cayman/artifacts/dqi_benchmark_comparison.png

@@ -11,12 +11,15 @@ import contextlib
 import importlib.util
 import math
 import os
+import sys
 import tempfile
+import threading
 import time
+import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 import numpy as np
 
@@ -32,16 +35,14 @@ M_PACKAGES = 3
 P_DEPTH = 1
 
 # QAOA settings
-OPTIMIZER = "spsa"  # "cobyla" or "spsa"
-SHOTS = 256
+OPTIMIZER = "cobyla"  # "cobyla" or "spsa"
+# Lower shots speed up Selene round-trips; raise for quieter energy estimates (e.g. 256).
+SHOTS = 128
 SEED = 0
+# Package-local blocks are N coverages + slack qubits (e.g. N=20 → ~39 vars).
 MAX_QUBITS = 64
 COBYLA_MAXITER = 40
 SPSA_MAXITER = 40
-<<<<<<< HEAD
-PENALTY_SCALE = 3.0
-EXECUTION_TARGET = "selene"  # "local" or "selene"
-=======
 PENALTY_SCALE = 4.0
 EXECUTION_TARGET = "local"  # "local" or "selene"
 >>>>>>> 59df311dd49e1d64e3e617de5063af30cbee381e
@@ -284,25 +285,32 @@ def _shot_to_str(shot: Any, n_vars: int) -> str:
     return "".join(str(_read_measurement_value(values[f"m{i}"])) for i in range(n_vars))
 
 
+# Guppy's compiler is not safe under concurrent dynamic loads (e.g. parallel Selene packages).
+_guppy_dynamic_kernel_lock = threading.Lock()
+
+
 @contextlib.contextmanager
 def _loaded_qaoa_kernel_from_source(source: str):
-    fd, path = tempfile.mkstemp(suffix="_qaoa_dynamic.py", text=True)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(source)
-        spec = importlib.util.spec_from_file_location("qaoa_dynamic", path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError("Failed to load generated QAOA module")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        kernel = module.qaoa_kernel
-        kernel.check()
-        yield kernel
-    finally:
+    with _guppy_dynamic_kernel_lock:
+        fd, path = tempfile.mkstemp(suffix="_qaoa_dynamic.py", text=True)
+        module_name = f"qaoa_dynamic_{uuid.uuid4().hex}"
         try:
-            os.unlink(path)
-        except OSError:
-            pass
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(source)
+            spec = importlib.util.spec_from_file_location(module_name, path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError("Failed to load generated QAOA module")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            kernel = module.qaoa_kernel
+            kernel.check()
+            yield kernel
+        finally:
+            sys.modules.pop(module_name, None)
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 def _compile_qaoa_hugr_from_source(source: str):
     with _loaded_qaoa_kernel_from_source(source) as kernel:
@@ -323,6 +331,11 @@ def _run_qaoa_locally(block: QuboBlock, source: str, shots: int, seed: int) -> Q
 
 
 def _run_qaoa_on_selene(block: QuboBlock, source: str, shots: int, seed: int) -> QaoaSampleStats:
+    if block.n_vars > SELENE_STATEVECTOR_MAX_QUBITS:
+        raise ValueError(
+            f"Block uses {block.n_vars} qubits; Nexus Selene statevector allows at most "
+            f"{SELENE_STATEVECTOR_MAX_QUBITS} per program. Use local execution or a smaller subsample."
+        )
     try:
         import qnexus as qnx
     except ModuleNotFoundError as exc:
@@ -540,7 +553,48 @@ def _add_squared_linear_penalty(Q: np.ndarray, coeffs: dict[int, float], rhs: fl
     return lam * rhs * rhs
 
 
-def build_qubo_block_for_package(problem: BundlingProblem, package_index: int) -> QuboBlock:
+def _add_pairwise_at_most_one_penalty(Q: np.ndarray, family_indices: Sequence[int], lam: float) -> None:
+    """Optional-family style: at most one selected — lam * sum_{i<j} x_i x_j (no slack)."""
+    idx = [int(i) for i in family_indices]
+    for ii in range(len(idx)):
+        for jj in range(ii + 1, len(idx)):
+            i, j = idx[ii], idx[jj]
+            half = lam / 2.0
+            Q[i, j] += half
+            Q[j, i] += half
+
+
+def _add_incompatible_pair_penalty(Q: np.ndarray, i: int, j: int, lam: float) -> None:
+    """Incompatible pair cannot both be 1: lam * x_i x_j."""
+    half = lam / 2.0
+    Q[i, j] += half
+    Q[j, i] += half
+
+
+def _add_dependency_penalty_no_slack(Q: np.ndarray, requires_idx: int, dependent_idx: int, lam: float) -> None:
+    """Dependent j requires prerequisite i: x_j <= x_i via lam * (x_j - x_i x_j) for binary x."""
+    r, d = int(requires_idx), int(dependent_idx)
+    Q[d, d] += lam
+    half = -lam / 2.0
+    Q[r, d] += half
+    Q[d, r] += half
+
+
+def build_qubo_block_for_package(
+    problem: BundlingProblem,
+    package_index: int,
+    *,
+    compact_penalties: bool = False,
+) -> QuboBlock:
+    """Build one package-local QUBO.
+
+    If ``compact_penalties`` is True, optional at-most-one, incompatibility, and dependency
+    constraints use pairwise / quadratic penalties **without** slack bits. Capacity still
+    uses binary slack (ceil(log2(K+1)) bits). This cuts total qubits (e.g. N=20 → N+3 instead
+    of N+19) so Selene statevector (≤26 qubits) and local emulation can run larger subsamples.
+    The formulation is equivalent at high λ for feasible optima but is not identical to the
+    slack+equality bridge used in the teaching notebooks.
+    """
     lam = default_penalty_weight(problem, package_index)
     N = problem.N
     K = problem.max_options_per_package
@@ -558,44 +612,52 @@ def build_qubo_block_for_package(problem: BundlingProblem, package_index: int) -
         slack_count += n_bits
         return indices
 
-    def can_allocate(n_bits: int) -> bool:
-        return slack_count + n_bits <= slack_budget
+    cap_slacks = max(1, int(math.ceil(math.log2(K + 1))))
 
     encoded_optional_families: list[list[int]] = []
     dropped_optional_family_count = 0
-    for indices in problem.optional_families.values():
-        if len(indices) <= 1:
-            continue
-        if can_allocate(1):
-            alloc_slack(1)
-            encoded_optional_families.append(indices)
-        else:
-            dropped_optional_family_count += 1
-
-    cap_slacks = max(1, int(math.ceil(math.log2(K + 1))))
-    capacity_constraint_encoded = can_allocate(cap_slacks)
-    if capacity_constraint_encoded:
-        alloc_slack(cap_slacks)
-
     encoded_dependency_rules: list[DependencyRule] = []
     dropped_dependency_count = 0
-    for rule in problem.dependency_rules:
-        if can_allocate(1):
-            alloc_slack(1)
-            encoded_dependency_rules.append(rule)
-        else:
-            dropped_dependency_count += 1
-
     encoded_incompatibility_rules: list[CompatibilityRule] = []
     dropped_incompatibility_count = 0
-    for rule in problem.compatibility_rules:
-        if rule.compatible:
-            continue
-        if can_allocate(1):
-            alloc_slack(1)
-            encoded_incompatibility_rules.append(rule)
-        else:
-            dropped_incompatibility_count += 1
+    capacity_constraint_encoded = False
+
+    if compact_penalties:
+        alloc_slack(cap_slacks)
+        capacity_constraint_encoded = True
+    else:
+
+        def can_allocate(n_bits: int) -> bool:
+            return slack_count + n_bits <= slack_budget
+
+        for indices in problem.optional_families.values():
+            if len(indices) <= 1:
+                continue
+            if can_allocate(1):
+                alloc_slack(1)
+                encoded_optional_families.append(indices)
+            else:
+                dropped_optional_family_count += 1
+
+        capacity_constraint_encoded = can_allocate(cap_slacks)
+        if capacity_constraint_encoded:
+            alloc_slack(cap_slacks)
+
+        for rule in problem.dependency_rules:
+            if can_allocate(1):
+                alloc_slack(1)
+                encoded_dependency_rules.append(rule)
+            else:
+                dropped_dependency_count += 1
+
+        for rule in problem.compatibility_rules:
+            if rule.compatible:
+                continue
+            if can_allocate(1):
+                alloc_slack(1)
+                encoded_incompatibility_rules.append(rule)
+            else:
+                dropped_incompatibility_count += 1
 
     n_slack = slack_count
     Q = np.zeros((N + n_slack, N + n_slack), dtype=float)
@@ -615,11 +677,17 @@ def build_qubo_block_for_package(problem: BundlingProblem, package_index: int) -
 
     for indices in problem.mandatory_families.values():
         constant_offset += _add_squared_linear_penalty(Q, {i: 1.0 for i in indices}, 1.0, lam)
-    for indices in encoded_optional_families:
-        s = next_slack(1)[0]
-        coeffs = {i: 1.0 for i in indices}
-        coeffs[s] = 1.0
-        constant_offset += _add_squared_linear_penalty(Q, coeffs, 1.0, lam)
+    if compact_penalties:
+        for indices in problem.optional_families.values():
+            if len(indices) <= 1:
+                continue
+            _add_pairwise_at_most_one_penalty(Q, indices, lam)
+    else:
+        for indices in encoded_optional_families:
+            s = next_slack(1)[0]
+            coeffs = {i: 1.0 for i in indices}
+            coeffs[s] = 1.0
+            constant_offset += _add_squared_linear_penalty(Q, coeffs, 1.0, lam)
 
     if capacity_constraint_encoded:
         cap_coeffs: dict[int, float] = {i: 1.0 for i in range(N)}
@@ -627,17 +695,44 @@ def build_qubo_block_for_package(problem: BundlingProblem, package_index: int) -
             cap_coeffs[s] = float(2**bit)
         constant_offset += _add_squared_linear_penalty(Q, cap_coeffs, float(K), lam)
 
-    for rule in encoded_incompatibility_rules:
-        i = problem.coverage_index(rule.coverage_i)
-        j = problem.coverage_index(rule.coverage_j)
-        s = next_slack(1)[0]
-        constant_offset += _add_squared_linear_penalty(Q, {i: 1.0, j: 1.0, s: 1.0}, 1.0, lam)
+    if compact_penalties:
+        for rule in problem.compatibility_rules:
+            if rule.compatible:
+                continue
+            i = problem.coverage_index(rule.coverage_i)
+            j = problem.coverage_index(rule.coverage_j)
+            _add_incompatible_pair_penalty(Q, i, j, lam)
+        for rule in problem.dependency_rules:
+            i = problem.coverage_index(rule.requires)
+            j = problem.coverage_index(rule.dependent)
+            _add_dependency_penalty_no_slack(Q, i, j, lam)
+    else:
+        for rule in encoded_incompatibility_rules:
+            i = problem.coverage_index(rule.coverage_i)
+            j = problem.coverage_index(rule.coverage_j)
+            s = next_slack(1)[0]
+            constant_offset += _add_squared_linear_penalty(Q, {i: 1.0, j: 1.0, s: 1.0}, 1.0, lam)
 
-    for rule in encoded_dependency_rules:
-        i = problem.coverage_index(rule.requires)
-        j = problem.coverage_index(rule.dependent)
-        s = next_slack(1)[0]
-        constant_offset += _add_squared_linear_penalty(Q, {j: 1.0, i: -1.0, s: 1.0}, 0.0, lam)
+        for rule in encoded_dependency_rules:
+            i = problem.coverage_index(rule.requires)
+            j = problem.coverage_index(rule.dependent)
+            s = next_slack(1)[0]
+            constant_offset += _add_squared_linear_penalty(Q, {j: 1.0, i: -1.0, s: 1.0}, 0.0, lam)
+
+    if compact_penalties:
+        opt_enc = sum(1 for ind in problem.optional_families.values() if len(ind) > 1)
+        opt_drop = 0
+        inc_enc = sum(1 for r in problem.compatibility_rules if not r.compatible)
+        inc_drop = 0
+        dep_enc = len(problem.dependency_rules)
+        dep_drop = 0
+    else:
+        opt_enc = len(encoded_optional_families)
+        opt_drop = dropped_optional_family_count
+        inc_enc = len(encoded_incompatibility_rules)
+        inc_drop = dropped_incompatibility_count
+        dep_enc = len(encoded_dependency_rules)
+        dep_drop = dropped_dependency_count
 
     return QuboBlock(
         package_index=package_index,
@@ -648,13 +743,13 @@ def build_qubo_block_for_package(problem: BundlingProblem, package_index: int) -
         constant_offset=constant_offset,
         max_qubits=MAX_QUBITS,
         slack_budget=slack_budget,
-        optional_family_constraints_encoded=len(encoded_optional_families),
-        optional_family_constraints_dropped=dropped_optional_family_count,
+        optional_family_constraints_encoded=opt_enc,
+        optional_family_constraints_dropped=opt_drop,
         capacity_constraint_encoded=capacity_constraint_encoded,
-        incompatibility_constraints_encoded=len(encoded_incompatibility_rules),
-        incompatibility_constraints_dropped=dropped_incompatibility_count,
-        dependency_constraints_encoded=len(encoded_dependency_rules),
-        dependency_constraints_dropped=dropped_dependency_count,
+        incompatibility_constraints_encoded=inc_enc,
+        incompatibility_constraints_dropped=inc_drop,
+        dependency_constraints_encoded=dep_enc,
+        dependency_constraints_dropped=dep_drop,
     )
 
 
@@ -733,6 +828,12 @@ def _run_qaoa_on_block(
     target = _normalize_execution_target(execution_target)
     if target == "local":
         return _run_qaoa_locally(block, source, shots=shots, seed=seed)
+    if block.n_vars > SELENE_STATEVECTOR_MAX_QUBITS:
+        raise ValueError(
+            f"Block uses {block.n_vars} qubits; Nexus Selene statevector allows at most "
+            f"{SELENE_STATEVECTOR_MAX_QUBITS} per program. Use execution_target='local' for "
+            f"larger blocks, or reduce n (coverages per package)."
+        )
     return _run_qaoa_on_selene(block, source, shots=shots, seed=seed)
 
 
@@ -997,6 +1098,7 @@ def solve_qaoa_matrix(
     p: int = P_DEPTH,
     plot_output_path: str | Path | None = None,
     execution_target: str = EXECUTION_TARGET,
+    compact_penalties: bool = False,
 ) -> np.ndarray:
     workflow_start = time.perf_counter()
     resolved_plot_output_path = (
@@ -1005,7 +1107,10 @@ def solve_qaoa_matrix(
     resolved_execution_target = _normalize_execution_target(execution_target)
     _log(f"[workflow] Loading instance data from {DATA_DIR}")
     problem = subsample_problem(load_ltm_instance(DATA_DIR), n_coverages=n, m_packages=m)
-    blocks = [build_qubo_block_for_package(problem, package_index) for package_index in range(problem.M)]
+    blocks = [
+        build_qubo_block_for_package(problem, package_index, compact_penalties=compact_penalties)
+        for package_index in range(problem.M)
+    ]
     x_matrix = np.zeros((problem.N, problem.M), dtype=int)
     plot_series: list[tuple[str, list[float], list[float]]] = []
 

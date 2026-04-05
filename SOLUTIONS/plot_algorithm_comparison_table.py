@@ -33,11 +33,13 @@ import matplotlib.pyplot as plt
 
 REPO_SOLUTIONS = Path(__file__).resolve().parent
 
-# Reference λ vectors taken from existing successful QAOA p=1 runs in run_summaries.csv
-# (one penalty weight per package-local block, m=3).
+# Reference λ vectors for m=3 QAOA rows in run_summaries.csv (one λ per package block).
+# n=10 uses the 515/669/921 triple from recent local runs; an older COBYLA p=1 row used
+# a different λ — pass --lambda '[687.14, …]' to target that row explicitly.
 DEFAULT_LAMBDA_BY_N: dict[int, tuple[float, ...]] = {
     5: (515.3601024000001, 669.5972399999999, 921.6943125),
-    10: (687.1468032000001, 892.7963199999999, 1228.92575),
+    7: (515.3601024000001, 669.5972399999999, 921.6943125),
+    10: (515.3601024000001, 669.5972399999999, 921.6943125),
 }
 
 CLASSICAL_GREEN = "#2D8C3C"
