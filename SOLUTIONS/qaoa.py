@@ -28,18 +28,18 @@ except ModuleNotFoundError:
 
 # Top-level choices
 N_COVERAGES = 10
-M_PACKAGES = 4
+M_PACKAGES = 3
 P_DEPTH = 1
 
 # QAOA settings
-OPTIMIZER = "cobyla"  # "cobyla" or "spsa"
+OPTIMIZER = "spsa"  # "cobyla" or "spsa"
 SHOTS = 256
 SEED = 0
 MAX_QUBITS = 24
 COBYLA_MAXITER = 40
 SPSA_MAXITER = 40
 PENALTY_SCALE = 3.0
-EXECUTION_TARGET = "local"  # "local" or "selene"
+EXECUTION_TARGET = "selene"  # "local" or "selene"
 NEXUS_PROJECT = "YQuantum QAOA"
 SELENE_SIMULATOR = "statevector"
 DATA_DIR = Path(__file__).resolve().parent.parent / "subprojects" / "will" / "Travelers" / "docs" / "data" / "YQH26_data"

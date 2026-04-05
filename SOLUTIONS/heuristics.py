@@ -24,12 +24,12 @@ SOLUTIONS_DIR = OUTPUT_ROOT / "solutions"
 RUN_SUMMARY_INDEX_PATH = OUTPUT_ROOT / "run_summaries.csv"
 
 # Top-level run config
-ALGORITHM = "classical"  # "classical", "qaoa", or "dqi" when implemented
-N_COVERAGES = 5
+ALGORITHM = "qaoa"  # "classical", "qaoa", or "dqi" when implemented
+N_COVERAGES = 10
 M_PACKAGES = 3
-P_DEPTH = 2
-QAOA_EXECUTION_TARGET = "local"  # "local" or "selene"
-QAOA_OPTIMIZER = "cobyla"  # "cobyla" or "spsa"
+P_DEPTH = 1
+QAOA_EXECUTION_TARGET = "selene"  # "local" or "selene"
+QAOA_OPTIMIZER = "spsa"  # "cobyla" or "spsa"
 SEED = 0
 
 SUMMARY_FIELDS = [
