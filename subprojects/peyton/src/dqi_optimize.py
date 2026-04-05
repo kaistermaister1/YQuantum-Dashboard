@@ -69,6 +69,88 @@ def _clip_params(theta: np.ndarray, p: int, *, parity: bool) -> np.ndarray:
     return out
 
 
+def run_dqi_fixed_angles(
+    Q: np.ndarray,
+    gammas: list[float],
+    *,
+    B: np.ndarray | None = None,
+    v: np.ndarray | None = None,
+    phase_c: np.ndarray | None = None,
+    normalize_phase_c: bool = True,
+    legacy_ising: bool = False,
+    betas: list[float] | None = None,
+    statistic: Statistic = "mean",
+    shots: int = 512,
+    seed: int = 0,
+    mixer: str = "rx",
+    max_qubits: int = 50,
+    constant_offset: float = 0.0,
+    execution: str = "local",
+    nexus_hugr_name: str = "dqi-hugr",
+    nexus_job_name: str = "dqi-execute",
+    nexus_helios_system: str = "Helios-1",
+    nexus_timeout: float | None = 300.0,
+) -> DqiOptimizationResult:
+    """Run DQI once with fixed layer angles (no classical optimization).
+
+    **Parity / Travelers ansatz** (``legacy_ising=False``): only ``gammas`` are used; each layer
+    applies ``Rz(gamma_l * c_i)`` with ``c`` from ``Q`` (or ``phase_c``). ``betas`` are ignored.
+
+    **Legacy Ising ansatz** (``legacy_ising=True``): pass ``betas`` with the same length as
+    ``gammas`` (alternating cost and mixer layers). If ``betas`` is omitted, uses
+    ``(π/2)`` per layer to match the default COBYLA initial point in ``optimize_dqi``.
+    """
+    q = np.asarray(Q, dtype=float)
+    if q.shape[0] != q.shape[1]:
+        raise ValueError("Q must be square")
+    p = len(gammas)
+    if p < 1:
+        raise ValueError("gammas must be non-empty")
+
+    parity_mode = not legacy_ising
+    if parity_mode:
+        betas_use = [0.0] * p
+    else:
+        if betas is None:
+            betas_use = [0.5 * math.pi] * p
+        else:
+            if len(betas) != p:
+                raise ValueError(f"betas must have length {p} (same as gammas), got {len(betas)}")
+            betas_use = [float(b) for b in betas]
+
+    stats = sample_dqi(
+        q,
+        gammas=[float(g) for g in gammas],
+        betas=betas_use,
+        B=B,
+        v=v,
+        phase_c=phase_c,
+        normalize_phase_c=normalize_phase_c,
+        legacy_ising=legacy_ising,
+        shots=int(shots),
+        seed=int(seed),
+        mixer=mixer,
+        max_qubits=max_qubits,
+        constant_offset=constant_offset,
+        execution=execution,
+        nexus_hugr_name=nexus_hugr_name,
+        nexus_job_name=nexus_job_name,
+        nexus_helios_system=nexus_helios_system,
+        nexus_timeout=nexus_timeout,
+        eval_tag="fixed",
+    )
+    obj = _objective(q, stats, statistic=statistic, constant_offset=constant_offset)
+    return DqiOptimizationResult(
+        gammas=[float(g) for g in gammas],
+        betas=[0.0] * p if parity_mode else betas_use,
+        objective_value=float(obj),
+        statistic=statistic,
+        stats_at_best=stats,
+        n_evaluations=1,
+        history=[float(obj)],
+    )
+
+
 def optimize_dqi(
     Q: np.ndarray,
     p: int,

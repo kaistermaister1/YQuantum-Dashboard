@@ -90,6 +90,42 @@ class TestRunDqiSmoke(unittest.TestCase):
         self.assertAlmostEqual(meta.constant_offset, 1.25)
         self.assertTrue(np.isfinite(value))
 
+    def test_run_dqi_non_variational_single_evaluation(self) -> None:
+        Q = np.array([[1.1, -0.25], [-0.25, -0.4]], dtype=float)
+        try:
+            x, value, meta = run_dqi_with_details(
+                Q,
+                p=1,
+                optimizer="cobyla",
+                variational=False,
+                fixed_gammas=[1.0],
+                shots=64,
+                seed=0,
+                max_qubits=8,
+                execution="local",
+            )
+        except RuntimeError as e:
+            _skip_if_selene_env_missing(e)
+            raise
+        self.assertEqual(x.shape, (2,))
+        self.assertEqual(meta.optimizer_result.n_evaluations, 1)
+        self.assertEqual(len(meta.optimizer_result.history), 1)
+        self.assertTrue(np.isfinite(value))
+
+    def test_run_dqi_fixed_gammas_length_must_match_p(self) -> None:
+        Q = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=float)
+        with self.assertRaises(ValueError):
+            run_dqi(
+                Q,
+                p=2,
+                optimizer="cobyla",
+                variational=False,
+                fixed_gammas=[1.0],
+                shots=8,
+                max_qubits=8,
+                execution="local",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

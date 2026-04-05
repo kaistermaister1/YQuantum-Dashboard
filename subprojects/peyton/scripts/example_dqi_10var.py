@@ -42,17 +42,21 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     Q = build_example_qubo(n=10, target_weight=4)
+    # Single parity layer: Rz(gamma * c_i) with fixed gamma=1 (no classical angle search).
+    # Use normalize_phase_c=False for raw Q diagonal as c_i; True scales c by max|diag(Q)|.
     x_best, value, meta = run_dqi_with_details(
         Q,
-        p=2,
+        p=1,
         optimizer="cobyla",
+        variational=False,
+        fixed_gammas=[1.0],
         shots=768,
         seed=7,
         maxiter=35,
         statistic="mean",
         mixer="rx",
         max_qubits=50,
-        
+        normalize_phase_c=False,
         ##############################
         execution="nexus_selene",
         ##############################
