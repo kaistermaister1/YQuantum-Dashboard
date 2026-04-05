@@ -60,6 +60,11 @@ def run_dqi(
     statistic: str = "mean",
     mixer: str = "rx",
     max_qubits: int = 50,
+    execution: str = "local",
+    nexus_hugr_name: str = "dqi-hugr",
+    nexus_job_name: str = "dqi-execute",
+    nexus_helios_system: str = "Helios-1",
+    nexus_timeout: float | None = 300.0,
 ) -> tuple[np.ndarray, float]:
     """Run DQI and return `(best_solution, value)` as requested."""
     q, meta = _extract_qubo_and_meta(Q)
@@ -76,6 +81,11 @@ def run_dqi(
         mixer=mixer,
         max_qubits=max_qubits,
         constant_offset=float(meta["constant_offset"]),
+        execution=execution,
+        nexus_hugr_name=nexus_hugr_name,
+        nexus_job_name=nexus_job_name,
+        nexus_helios_system=nexus_helios_system,
+        nexus_timeout=nexus_timeout,
     )
     best_x = bitstring_to_array(res.stats_at_best.best_bitstring)
     return best_x, float(res.stats_at_best.best_value)
@@ -94,6 +104,11 @@ def run_dqi_with_details(
     statistic: str = "mean",
     mixer: str = "rx",
     max_qubits: int = 50,
+    execution: str = "local",
+    nexus_hugr_name: str = "dqi-hugr",
+    nexus_job_name: str = "dqi-execute",
+    nexus_helios_system: str = "Helios-1",
+    nexus_timeout: float | None = 300.0,
 ) -> tuple[np.ndarray, float, DqiRunMetadata]:
     """Run DQI and return `(best_solution, value, metadata)`."""
     q, meta = _extract_qubo_and_meta(Q)
@@ -110,6 +125,11 @@ def run_dqi_with_details(
         mixer=mixer,
         max_qubits=max_qubits,
         constant_offset=float(meta["constant_offset"]),
+        execution=execution,
+        nexus_hugr_name=nexus_hugr_name,
+        nexus_job_name=nexus_job_name,
+        nexus_helios_system=nexus_helios_system,
+        nexus_timeout=nexus_timeout,
     )
 
     bitstring = res.stats_at_best.best_bitstring

@@ -5,12 +5,65 @@ from __future__ import annotations
 import importlib.util
 import math
 import os
+import sys
 import tempfile
-from collections import Counter
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 import numpy as np
+
+from src.dqi_backends import (
+    bitstring_counts_from_shots,
+    normalize_execution,
+    run_kernel_local,
+    run_kernel_nexus,
+)
+
+
+def import_guppylang_with_workaround() -> None:
+    """Import ``guppylang`` (pulls in wasmtime). Applies a Windows-on-ARM64 shim when needed.
+
+    PyPI ``wasmtime`` wheels often ship only ``win32-x86_64/_wasmtime.dll``, while
+    ``platform.machine()`` on Windows ARM64 is ``ARM64``, so ``wasmtime._ffi`` looks for a
+    missing ``win32-aarch64`` folder. We temporarily report ``AMD64`` so wasmtime loads the
+    bundled x86_64 DLL. That only works if this **Python process is x64** (installer:
+    "Windows installer (64-bit)" from python.org, which runs under emulation on ARM PCs).
+    Native **ARM64** Python cannot load an x86_64 DLL; use x64 Python in that case.
+    """
+    import platform
+
+    restore_machine: Callable[[], str] | None = None
+    if sys.platform == "win32" and platform.machine() in ("ARM64", "arm64"):
+        spec = importlib.util.find_spec("wasmtime")
+        if spec is not None and spec.origin:
+            root = Path(spec.origin).parent
+            aarch_dll = root / "win32-aarch64" / "_wasmtime.dll"
+            x64_dll = root / "win32-x86_64" / "_wasmtime.dll"
+            if not aarch_dll.is_file() and x64_dll.is_file():
+                restore_machine = platform.machine
+
+                def _machine_amd64() -> str:
+                    return "AMD64"
+
+                platform.machine = _machine_amd64  # type: ignore[assignment]
+
+    try:
+        import guppylang  # noqa: F401
+    except ImportError as exc:
+        raise ImportError("Guppy is required: pip install guppylang") from exc
+    except OSError as exc:
+        raise RuntimeError(
+            "Guppy failed to load wasmtime's native library. "
+            "On Windows ARM64: install Python's **x86-64** build from python.org (not the "
+            "ARM64 installer) so the bundled win32-x86_64 wasmtime DLL can load, then "
+            "`pip install --upgrade --force-reinstall wasmtime guppylang` and the MSVC "
+            "x64 redistributable. "
+            "Details: https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist"
+        ) from exc
+    finally:
+        if restore_machine is not None:
+            platform.machine = restore_machine
 
 
 def qubo_energy(x: np.ndarray, Q: np.ndarray, constant_offset: float = 0.0) -> float:
@@ -186,12 +239,24 @@ def sample_dqi(
     mixer: str = "rx",
     max_qubits: int = 50,
     constant_offset: float = 0.0,
+    execution: str = "local",
+    nexus_hugr_name: str = "dqi-hugr",
+    nexus_job_name: str = "dqi-execute",
+    nexus_helios_system: str = "Helios-1",
+    nexus_timeout: float | None = 300.0,
+    eval_tag: str = "",
 ) -> DqiSampleStats:
-    """Run a DQI circuit with fixed parameters and return sampled statistics."""
-    try:
-        import guppylang  # noqa: F401
-    except ImportError as exc:
-        raise ImportError("Guppy is required: pip install guppylang") from exc
+    """Run a DQI circuit with fixed parameters and return sampled statistics.
+
+    ``execution``:
+        - ``local`` / ``selene`` — Guppy emulator on this machine (default).
+        - ``nexus_selene`` — Nexus job with ``SeleneConfig`` (cloud Selene emulator).
+        - ``nexus_helios`` — Nexus job with ``HeliosConfig`` (set ``nexus_helios_system``).
+
+    Nexus runs require ``qnexus`` login, an active project, and unique HUGR/job names per
+    submission when optimizing (use ``eval_tag``, set automatically by ``optimize_dqi``).
+    """
+    import_guppylang_with_workaround()
 
     q = np.asarray(Q, dtype=float)
     q = (q + q.T) * 0.5
@@ -218,19 +283,40 @@ def sample_dqi(
         kernel = mod.dqi_kernel
         kernel.check()
 
-        emu = kernel.emulator(n_qubits=n).with_shots(int(shots)).with_seed(int(seed))
-        res = emu.run()
+        backend = normalize_execution(execution)
+        tag = str(eval_tag).strip()
+        hugr_name = f"{nexus_hugr_name}-{tag}" if tag else nexus_hugr_name
+        job_name = f"{nexus_job_name}-{tag}" if tag else nexus_job_name
 
-        def shot_to_str(shot: Any) -> str:
-            d = shot.as_dict()
-            return "".join(str(int(d[f"m{i}"])) for i in range(n))
-
-        counts = Counter(shot_to_str(s) for s in res.results)
-        bitstring_counts = dict(counts.most_common())
+        if backend == "local":
+            res = run_kernel_local(kernel, n, int(shots), int(seed))
+            bitstring_counts = bitstring_counts_from_shots(res.results, n)
+        elif backend == "nexus_selene":
+            bitstring_counts = run_kernel_nexus(
+                kernel,
+                n,
+                int(shots),
+                mode="selene",
+                hugr_name=hugr_name,
+                job_name=job_name,
+                helios_system_name=nexus_helios_system,
+                timeout=nexus_timeout,
+            )
+        else:
+            bitstring_counts = run_kernel_nexus(
+                kernel,
+                n,
+                int(shots),
+                mode="helios",
+                hugr_name=hugr_name,
+                job_name=job_name,
+                helios_system_name=nexus_helios_system,
+                timeout=nexus_timeout,
+            )
 
         best_s: str | None = None
         best_val = float("inf")
-        for s in counts:
+        for s in bitstring_counts:
             x = np.array([float(int(ch)) for ch in s], dtype=float)
             e = qubo_energy(x, q, constant_offset=constant_offset)
             if e < best_val:

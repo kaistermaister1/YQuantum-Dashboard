@@ -87,6 +87,11 @@ def optimize_dqi(
     mixer: str = "rx",
     max_qubits: int = 50,
     constant_offset: float = 0.0,
+    execution: str = "local",
+    nexus_hugr_name: str = "dqi-hugr",
+    nexus_job_name: str = "dqi-execute",
+    nexus_helios_system: str = "Helios-1",
+    nexus_timeout: float | None = 300.0,
 ) -> DqiOptimizationResult:
     """Optimize DQI angles for a fixed QUBO matrix."""
     if p < 1:
@@ -112,6 +117,12 @@ def optimize_dqi(
             mixer=mixer,
             max_qubits=max_qubits,
             constant_offset=constant_offset,
+            execution=execution,
+            nexus_hugr_name=nexus_hugr_name,
+            nexus_job_name=nexus_job_name,
+            nexus_helios_system=nexus_helios_system,
+            nexus_timeout=nexus_timeout,
+            eval_tag=str(eval_idx),
         )
         obj = _objective(q, stats, statistic=statistic, constant_offset=constant_offset)
         history.append(float(obj))

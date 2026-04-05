@@ -61,6 +61,31 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--n-samples", type=int, default=64)
     ap.add_argument("--max-qubits", type=int, default=50)
 
+    ap.add_argument(
+        "--execution",
+        choices=["local", "selene", "nexus-selene", "nexus-helios"],
+        default="local",
+        help="local/selene: Guppy emulator on this machine; nexus-*: Quantinuum Nexus (login + project).",
+    )
+    ap.add_argument("--nexus-hugr-name", default="dqi-hugr", help="HUGR upload name prefix (eval index appended).")
+    ap.add_argument("--nexus-job-name", default="dqi-execute", help="Execute job name prefix (eval index appended).")
+    ap.add_argument(
+        "--nexus-helios-system",
+        default="Helios-1",
+        help="HeliosConfig.system_name when --execution nexus-helios (hardware or emulator name).",
+    )
+    ap.add_argument(
+        "--nexus-no-timeout",
+        action="store_true",
+        help="Do not cap wait time for Nexus execute (timeout=None).",
+    )
+    ap.add_argument(
+        "--nexus-timeout",
+        type=float,
+        default=300.0,
+        help="Seconds to wait for each Nexus job (ignored if --nexus-no-timeout).",
+    )
+
     ap.add_argument("--benchmark", action="store_true", help="Run baseline comparisons")
     ap.add_argument("--no-qaoa-baseline", action="store_true")
     ap.add_argument("--random-samples", type=int, default=4096)
@@ -84,6 +109,9 @@ def main() -> int:
             raise ValueError("--data-dir is required when --source ltm-block")
         target = _build_block_from_ltm(args)
 
+    nexus_timeout = None if args.nexus_no_timeout else float(args.nexus_timeout)
+    exec_key = args.execution.replace("-", "_")
+
     best_x, best_value, meta = run_dqi_with_details(
         target,
         p=args.p,
@@ -96,6 +124,11 @@ def main() -> int:
         statistic=args.statistic,
         mixer=args.mixer,
         max_qubits=args.max_qubits,
+        execution=exec_key,
+        nexus_hugr_name=args.nexus_hugr_name,
+        nexus_job_name=args.nexus_job_name,
+        nexus_helios_system=args.nexus_helios_system,
+        nexus_timeout=nexus_timeout,
     )
 
     print("=== DQI Result ===")
