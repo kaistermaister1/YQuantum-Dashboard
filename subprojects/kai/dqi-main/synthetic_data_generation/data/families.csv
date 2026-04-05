@@ -1,0 +1,19 @@
+fam_abbrev,name,min_select,max_select
+FAM_EXT,Exterior,0,
+FAM_BUMP,Exterior Bumpers,0,
+FAM_WND,Window Surrounds,0,
+FAM_MIR,Mirror Housings,0,
+FAM_PNT,Paint Finish,0,
+FAM_WHL,Wheels & Tires,0,
+FAM_STYPE,Seat Type,1,1
+FAM_SFEAT,Seat Features,0,
+FAM_UPHOL,Upholstery Material,1,1
+FAM_STWHL,Steering Wheel,1,1
+FAM_SAF,Child & Passenger Safety,0,
+FAM_CC,Climate & Comfort,0,
+FAM_INF,Infotainment & Connectivity,0,
+FAM_LBA,Lighting & Ambience,0,
+FAM_ADAS,Driver Assistance & Safety,0,
+FAM_CHAS,Chassis & Handling,0,
+FAM_AUD,Audio & Entertainment,0,
+FAM_CTOW,Cargo & Towing,0,

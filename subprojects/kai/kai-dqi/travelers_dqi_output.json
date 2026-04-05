@@ -1,0 +1,108 @@
+{
+  "n_coverages": 4,
+  "m_packages": 2,
+  "objective_mode": "compressed",
+  "objective_scale": 1,
+  "objective_target_max": 3,
+  "bp_mode": "BP2",
+  "ell": 1,
+  "bp_iterations": 2,
+  "beta_mode": "half_sum",
+  "seed": 0,
+  "c_im_float": [
+    [
+      171.78670080000003,
+      152.889606144
+    ],
+    [
+      102.61060992000003,
+      133.42662144000002
+    ],
+    [
+      162.61517999999998,
+      223.19907999999998
+    ],
+    [
+      43.23062016000001,
+      46.45432512000001
+    ]
+  ],
+  "c_im_int": [
+    [
+      3,
+      2
+    ],
+    [
+      2,
+      2
+    ],
+    [
+      3,
+      3
+    ],
+    [
+      1,
+      1
+    ]
+  ],
+  "blocks": [
+    {
+      "package_index": 0,
+      "package_name": "Young Driver Budget",
+      "original_num_vars": 4,
+      "expanded_num_vars": 4,
+      "num_constraints": 3,
+      "num_complements": 0,
+      "objective_int": [
+        3,
+        2,
+        3,
+        1
+      ],
+      "objective_lower_bound": 4,
+      "B_shape": [
+        143,
+        66
+      ],
+      "ell": 1,
+      "code_distance": 3,
+      "max_constraints_satisfiable": 106,
+      "dqi_expected_f": 11.012066841125488,
+      "dqi_expected_s": 77.00603485107422,
+      "quantum_attempted": true,
+      "quantum_ran": false,
+      "quantum_postselected_shots": null,
+      "quantum_best_semantic_assignment": null,
+      "note": "skipped full quantum simulation because reduced max-XOR has 143 rows, above row_limit=24"
+    },
+    {
+      "package_index": 1,
+      "package_name": "Young Family Starter",
+      "original_num_vars": 4,
+      "expanded_num_vars": 4,
+      "num_constraints": 3,
+      "num_complements": 0,
+      "objective_int": [
+        2,
+        2,
+        3,
+        1
+      ],
+      "objective_lower_bound": 4,
+      "B_shape": [
+        143,
+        66
+      ],
+      "ell": 1,
+      "code_distance": 3,
+      "max_constraints_satisfiable": 106,
+      "dqi_expected_f": 11.027392387390137,
+      "dqi_expected_s": 77.0136947631836,
+      "quantum_attempted": true,
+      "quantum_ran": false,
+      "quantum_postselected_shots": null,
+      "quantum_best_semantic_assignment": null,
+      "note": "skipped full quantum simulation because reduced max-XOR has 143 rows, above row_limit=24"
+    }
+  ]
+}

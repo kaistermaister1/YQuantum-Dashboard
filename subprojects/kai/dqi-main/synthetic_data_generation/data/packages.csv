@@ -1,0 +1,11 @@
+pkg_abbrev,name,price_eur,margin_eur
+PKG_COMF,Comfort Pack,2550,1575
+PKG_TECH,Tech Pack,3400,2100
+PKG_LITE,Lighting Pack,850,525
+PKG_DAPT,Driver Assist Pack,3550,2300
+PKG_SPORT,Sport Pack,2500,1550
+PKG_SOUND,Premium Sound Pack,2700,1800
+PKG_CARGO,Cargo Pack,1200,800
+PKG_TRIM_ADV,Advanced Trim Package,1300,775
+PKG_TRIM_S,Sport Trim Package,2850,1700
+PKG_TRIM_SPB,Sport-Plus Black Package,2850,1700

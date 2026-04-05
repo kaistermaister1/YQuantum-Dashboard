@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>BCG-BMW DQI implementation</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: sans-serif; line-height: 1.6; margin: 40px auto; max-width: 900px; padding: 0 20px; }
+    h1, h2, h3 { color: #2c3e50; }
+    pre { background: #f5f5f5; padding: 15px; overflow-x: auto; }
+    code { background: #f5f5f5; padding: 2px 4px; }
+    a { color: #0366d6; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    hr { margin: 40px 0; }
+    img { max-width: 100%; height: auto; margin: 20px 0; border: 1px solid #ddd; border-radius: 4px; }
+    figure { margin: 30px 0; }
+    figcaption { font-size: 0.9em; color: #555; text-align: center; margin-top: 8px; }
+  </style>
+</head>
+<body>
+
+  <h1>BCG-BMW DQI implementation</h1>
+
+  <p><em>
+    End-to-end Qiskit implementation of <strong>Decoded Quantum Interferometry</strong> (DQI) applied to industrial integer linear programs (ILPs), with a focus on automotive option-packaging problems.
+  </em></p>
+
+  <p>
+    This repository accompanies the paper
+    <em>“Towards Solving Industrial Integer Linear Programs with Decoded Quantum Interferometry”</em>
+    (arXiv:2509.08328). It provides a full quantum-circuit realization of DQI, including a
+    <strong>quantum version of belief propagation</strong> for decoding LDPC codes, and a pipeline that maps ILPs
+    to MAX-XORSAT instances suitable for DQI-based optimization.
+  </p>
+
+  <p>
+    DQI uses quantum interference to bias sampling toward high-value solutions and reframes the optimization
+    problem as a decoding task over sparse parity-check codes. In this implementation, decoding is performed
+    coherently on the quantum state via a quantum binary belief-propagation decoder before measurement.
+  </p>
+
+  <figure>
+    <img src="images/why_dqi.png" alt="Why DQI: conceptual illustration of quantum interference optimization">
+    <figcaption>Conceptual illustration: how quantum interference in DQI biases toward optimal (or near-optimal) solutions.</figcaption>
+  </figure>
+
+  <!-- === 1) Overview, Use Cases & Build Instructions === -->
+  <h2>1. Overview & Use Cases</h2>
+
+  <p>This project demonstrates how DQI, combined with a quantum belief-propagation decoder, can be used to tackle real-world combinatorial optimization tasks derived from ILPs, such as packaging problems for automotive configurations. The code supports:</p>
+
+  <ul>
+    <li>A pipeline from industrial ILPs to <strong>MAX-XORSAT</strong> instances.</li>
+    <li>A detailed quantum-circuit implementation of the DQI algorithm, including a quantum binary belief-propagation decoder.</li>
+    <li>Benchmarks against classical Gurobi solvers and random sampling baselines.</li>
+    <li>Resource estimation (qubits, gates, depth) to study scaling and hardware feasibility.</li>
+  </ul>
+
+  <h3>Example use cases</h3>
+  <ul>
+    <li>Automotive option-packaging / configuration optimization (e.g. constraints, preferences, and dependencies between options).</li>
+    <li>General combinatorial optimization problems that can be reduced to MAX-XORSAT instances.</li>
+    <li>Research on quantum-enhanced decoding and quantum-classical hybrid optimization strategies using DQI.</li>
+  </ul>
+
+  <h3>Environment setup</h3>
+  <p>We recommend using a dedicated conda environment:</p>
+  <pre><code>conda create -n dqi_env python=3.11
+conda activate dqi_env
+pip install -r requirements.txt
+</code></pre>
+
+  <p>Optional: if GPUs are available, you can upgrade JAX to a CUDA-enabled build, for example:</p>
+  <pre><code>pip install --upgrade "jax[cuda12]"
+</code></pre>
+
+  <p>
+    Some experiment scripts (e.g. <code>experiment_empirical_vs_analytic.py</code>,
+    <code>experiment_performance_resources.py</code>) contain a commented line
+    <code>os.environ["CUDA_VISIBLE_DEVICES"] = "0"</code> that can be uncommented to target a specific GPU.
+  </p>
+
+  <!-- === 2) Logical Mapping of Implementation === -->
+  <h2>2. Implementation Architecture & Logical Mapping</h2>
+  <p>
+    The implementation maps the DQI methodology into a full pipeline using Qiskit. It combines problem encoding,
+    DQI state preparation, <strong>coherent quantum belief-propagation decoding</strong>, interference, measurement,
+    and classical post-processing.
+  </p>
+
+  <figure>
+    <img src="images/implementation_mapping.png" alt="Logical mapping of DQI implementation pipeline">
+    <figcaption>Logical map of the implemented pipeline: ILP → MAX-XORSAT → quantum DQI encoding & decoding → measurement → solution extraction.</figcaption>
+  </figure>
+
+  <h3>Supported Flow</h3>
+  <ul>
+    <li>Define optimization problem (e.g. packaging constraints) and map to a MAX-XORSAT-style instance.</li>
+    <li>Use Qiskit to build the quantum circuit for DQI state preparation, coherent Belief Propagation decoding, and interference.</li>
+    <li>Measure the quantum state to obtain bit-strings (syndromes / candidate solutions).</li>
+    <li>Post-process &amp; verify solutions, optionally iterate for improved results or sampling.</li>
+  </ul>
+
+  <!-- === 3) Running Experiments & Pipelines === -->
+  <h2>3. Running Experiments & Pipelines</h2>
+
+  <p>
+    All numerical experiments from the paper are implemented as Python modules under the
+    <code>pipelines</code> directory. To reproduce them, run:
+  </p>
+
+  <pre><code>python -m pipelines.experiment_empirical_vs_analytic
+python -m pipelines.experiment_histogram_small_max_xorsat
+python -m pipelines.experiment_performance_resources
+python -m pipelines.experiment_success_rates_2d_plots
+</code></pre>
+
+  <p>
+    Each script generates data (e.g. success rates, histograms, resource estimates) and plots that correspond
+    to the figures and analyses in the paper.
+  </p>
+
+  <h3>Advanced usage: synthetic package data & ILP generation</h3>
+  <p>
+    The repository also includes tools to generate synthetic automotive data and build ILP instances that can
+    be fed into the DQI pipeline.
+  </p>
+
+  <p><strong>1) Vehicle generation</strong></p>
+  <pre><code>python synthetic_data_generation/generate_vehicles.py \
+  -N 1000 \
+  --input_dir synthetic_data_generation/data \
+  --output_file synthetic_data_generation/data/test_vehicles.csv
+</code></pre>
+
+  <p><strong>2) Take-rate data building</strong></p>
+  <pre><code>python synthetic_data_generation/build_package_take_rate_data.py \
+  --families_file synthetic_data_generation/data/families.csv \
+  --options_file synthetic_data_generation/data/options.csv \
+  --vehicles_file synthetic_data_generation/data/test_vehicles.csv \
+  --template_file synthetic_data_generation/package_templates.yaml \
+  --output_file pipelines/data/take_rates.parquet \
+  --output_format parquet
+</code></pre>
+
+  <p><strong>3) Creating an ILP instance</strong></p>
+  <pre><code>python pipelines/compute_milp_formulation.py
+</code></pre>
+
+  <p>
+    This produces an ILP instance (stored, for example, in <code>pipeline/data/milp_formulation.json</code>)
+    that can subsequently be converted to MAX-XORSAT and used in the DQI experiments.
+  </p>
+
+  <hr>
+
+  <!-- === 4) Scaling, Results & Future Directions === -->
+  <h2>4. Scaling, Observations & Future Research Directions</h2>
+  <p>
+    The implementation is used to study how DQI-based decoding behaves as problem sizes grow, both on
+    realistically sized industrial instances and on controlled synthetic benchmarks. The experiments explore
+    solution quality, success rates, and quantum resource requirements across different decoding depths and
+    decoder variants.
+  </p>
+
+  <figure>
+    <img src="images/scaling_results.png" alt="Scaling results and proposed future research areas">
+    <figcaption>Empirical scaling results &amp; proposed research / improvement areas for larger problem instances.</figcaption>
+  </figure>
+
+  <h3>Suggested Future Improvements &amp; Research Directions</h3>
+  <ul>
+    <li>Improve the quantum implementation of state of the art classical decoding algorithms (or integrate quantum native decoders) to handle larger / denser instances more reliably.</li>
+    <li>Optimize quantum circuit depth / gate count to better suit near-term quantum hardware or simulators.</li>
+    <li>Extend problem mapping beyond MAX-XORSAT — support other combinatorial formulations relevant to industrial constraints (e.g. mixed constraints, soft constraints, preferences).</li>
+    <li>Provide benchmarking suite to compare DQI-based solutions against classical solvers on industrial-scale problems (both in quality and runtime).</li>
+  </ul>
+
+  <figure>
+    <img src="images/next_steps.png" alt="Suggested Future Improvements &amp; Research Directions">
+  </figure>
+
+  <hr>
+
+  <h2>Usage Example</h2>
+  <p>
+    To reproduce one of the core experiments from the paper (for example, comparing empirical quantum
+    simulations with analytic predictions), run:
+  </p>
+
+  <pre><code>python -m pipelines.experiment_empirical_vs_analytic
+</code></pre>
+
+  <p>
+    Other experiments can be invoked analogously by replacing the module name, e.g.
+    <code>experiment_histogram_small_max_xorsat</code>,
+    <code>experiment_performance_resources</code>, or
+    <code>experiment_success_rates_2d_plots</code>.
+  </p>
+
+  <h2>License</h2>
+  <p>This project is released under the <strong>Apache-2.0 License</strong>.</p>
+
+  <h2>Authors / Contact</h2>
+  <p>
+    Francesc Sabater, Ouns El Harzli, Geert-Jan Besjes, Marvin Erdmann, Johannes Klepsch,
+    Jonas Hiltrop, Jean-François Bobier, Yudong Cao, and Carlos A. Riofrío.
+  </p>
+
+  <h2>Reference</h2>
+  <p>
+    Francesc Sabater, Ouns El Harzli, Geert-Jan Besjes, Marvin Erdmann, Johannes Klepsch,
+    Jonas Hiltrop, Jean-François Bobier, Yudong Cao, and Carlos A. Riofrío.
+    “Towards Solving Industrial Integer Linear Programs with Decoded Quantum Interferometry.”
+    arXiv preprint <strong>arXiv:2509.08328</strong>, 2025.
+  </p>
+
+  <hr>
+  <p>Last updated: <script>document.write(new Date().toISOString().substring(0,10));</script></p>
+  <footer>
+    <p>Source code for this project is available on 
+        <a href="https://github.com/BCG-X-Official/dqi" target="_blank">GitHub</a>.
+    </p>
+</footer>
+</body>
+</html>

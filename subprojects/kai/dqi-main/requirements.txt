@@ -1,0 +1,13 @@
+gurobipy
+jax
+matplotlib
+numpy
+pandas
+PyYAML
+qiskit
+qiskit-ibm-runtime
+qiskit_aer
+scipy
+seaborn
+sympy
+tqdm
