@@ -1,11 +1,11 @@
-"""Tests for src/qubo_block.py (run from ``code_examples`` directory).
+"""Tests for src/qubo_block.py (run from ``qaoa_python`` directory).
 
 Run:
 
-    cd Travelers/code_examples
+    cd subprojects/will/qaoa_python
     python -m unittest tests.test_qubo_block -v
 
-Requires: numpy, pulp, and LTM CSVs at ``../docs/data/YQH26_data`` relative to ``code_examples``.
+Requires: numpy, pulp, and LTM CSVs at ``../Travelers/docs/data/YQH26_data`` relative to ``qaoa_python``.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from src.qubo_block import (  # noqa: E402
 
 
 def _ltm_data_dir() -> Path:
-    return _ROOT.parent / "docs" / "data" / "YQH26_data"
+    return _ROOT.parent / "Travelers" / "docs" / "data" / "YQH26_data"
 
 
 def _package_margin(problem: BundlingProblem, m: int, coverage_bits: np.ndarray) -> float:

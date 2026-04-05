@@ -7,7 +7,7 @@ Maps binary QUBO  ``E(x) = xᵀ Q x + const``  to a **commuting Z Hamiltonian** 
 Angle literals for ``rz`` / ``rx`` follow the same **π-scaled** convention as the
 hackathon template: use ``2 * phase_radians / π`` inside ``angle(...)`` so that a
 full ``exp(-i φ Z)`` (single-qubit) is obtained when the underlying gate matches
-the usual ``Rz(2φ) = exp(-i φ Z)`` style (see notebook ``will/qaoa_guppy_template.ipynb``).
+the usual ``Rz(2φ) = exp(-i φ Z)`` style (see notebook ``notebooks/qaoa_guppy_template.ipynb`` in ``qaoa_python/``).
 
 The Selene entrypoint is **zero-argument**; this module **code-generates** a fresh
 ``@guppy`` kernel for each angle tuple (acceptable for small outer optimization loops).

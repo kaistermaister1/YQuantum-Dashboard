@@ -8,8 +8,8 @@ This repository is organized for a root-level Vercel deployment.
 
 ## Subprojects
 
-- `subprojects/will/Travelers/` is the primary challenge-materials and data workspace
-- `subprojects/will/bundle_qubo/` is the smaller QUBO-focused companion workspace
+- `subprojects/will/Travelers/` is the primary challenge-materials, data, classical `code_examples`, and `qubo_vis` workspace
+- `subprojects/will/qaoa_python/` is Will’s Python package (QAOA on `QuboBlock`, optimizers, tests) plus the Guppy notebook under `qaoa_python/notebooks/`
 - `subprojects/kai/` holds Kai's files
 - `subprojects/cayman/` holds Cayman's files
 - `subprojects/peyton/` holds Peyton's files
