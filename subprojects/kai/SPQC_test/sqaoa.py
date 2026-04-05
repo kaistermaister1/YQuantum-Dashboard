@@ -20,12 +20,14 @@ zero-argument functions.
 
 from __future__ import annotations
 
+import csv
 import math
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Sequence
 
 import numpy as np
 
@@ -34,6 +36,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import SOLUTIONS.qaoa as base_qaoa
+from SOLUTIONS.classical_baseline import solve_classical_baseline
+from SOLUTIONS.qaoa_plots import save_training_loss_plot
 
 
 # Top-level research controls.
@@ -54,6 +58,58 @@ POSTSELECT_ENERGY_QUANTILE = 0.25
 POSTSELECT_VARIANCE_QUANTILE = 0.50
 POSTSELECT_DEPTH_WEIGHT = 1.0
 EXECUTION_TARGET = base_qaoa.EXECUTION_TARGET
+
+OUTPUT_ROOT = Path(__file__).resolve().parent / "SQAOA"
+SUMMARIES_DIR = OUTPUT_ROOT / "summaries"
+HISTORIES_DIR = OUTPUT_ROOT / "histories"
+SOLUTIONS_DIR = OUTPUT_ROOT / "solutions"
+PLOTS_DIR = OUTPUT_ROOT / "plots"
+RUN_SUMMARY_INDEX_PATH = OUTPUT_ROOT / "run_summaries.csv"
+
+SUMMARY_FIELDS = [
+    "run_id",
+    "algorithm",
+    "execution_target",
+    "optimizer",
+    "seed",
+    "n",
+    "m",
+    "p",
+    "t",
+    "branch_coverages",
+    "branch_packages",
+    "repetitions",
+    "runtime_sec",
+    "best_profit",
+    "classical_opt_profit",
+    "num_samples_total",
+    "num_samples_feasible",
+    "num_samples_postselected",
+    "num_objective_evals",
+    "solution_path",
+    "history_path",
+    "plot_path",
+    "notes",
+]
+
+HISTORY_FIELDS = [
+    "run_id",
+    "algorithm",
+    "stage",
+    "execution_target",
+    "optimizer",
+    "package_index",
+    "package_name",
+    "evaluation_index",
+    "objective_value",
+    "best_objective",
+    "best_bitstring",
+    "coverage_bitstring",
+    "best_qubo_energy",
+    "shots_total",
+    "shots_feasible",
+    "improved",
+]
 
 
 @dataclass
@@ -76,6 +132,130 @@ class AdviserPosterior:
     variance_threshold: float
     per_adviser_mean_energy: np.ndarray
     raw_slot_counts: np.ndarray
+
+
+def _ensure_output_dirs() -> None:
+    for directory in (OUTPUT_ROOT, SUMMARIES_DIR, HISTORIES_DIR, SOLUTIONS_DIR, PLOTS_DIR):
+        directory.mkdir(parents=True, exist_ok=True)
+
+
+def _path_for_csv(directory: Path, stem: str) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / f"{stem}.csv"
+
+
+def _path_to_repo_relative_string(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+    except ValueError:
+        return str(path.resolve())
+
+
+def _write_csv_rows(path: Path, fieldnames: Sequence[str], rows: Sequence[dict[str, Any]]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in fieldnames})
+    return path
+
+
+def _append_csv_row(path: Path, fieldnames: Sequence[str], row: dict[str, Any]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    file_exists = path.exists()
+    with path.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow({field: row.get(field, "") for field in fieldnames})
+    return path
+
+
+def _write_solution_matrix_csv(
+    path: Path,
+    matrix: np.ndarray,
+    coverage_names: Sequence[str],
+    package_names: Sequence[str],
+) -> Path:
+    rows: list[dict[str, Any]] = []
+    for row_index, coverage_name in enumerate(coverage_names):
+        row: dict[str, Any] = {"coverage_index": row_index, "coverage_name": coverage_name}
+        for package_index, package_name in enumerate(package_names):
+            row[package_name] = int(matrix[row_index, package_index])
+        rows.append(row)
+    return _write_csv_rows(path, ["coverage_index", "coverage_name", *package_names], rows)
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _build_run_id(
+    *,
+    n: int,
+    m: int,
+    p: int,
+    t: int,
+    branch_coverages: int,
+    branch_packages: int,
+    repetitions: int,
+    execution_target: str,
+    optimizer: str,
+) -> str:
+    return (
+        "sqaoa"
+        f"_{execution_target}_{optimizer}"
+        f"_n{n}_m{m}_p{p}_t{t}"
+        f"_bc{branch_coverages}_bp{branch_packages}_r{repetitions}"
+        f"_{_utc_timestamp()}"
+    )
+
+
+def _build_feasibility_checker(problem: base_qaoa.BundlingProblem) -> Callable[[Sequence[int]], bool]:
+    coverage_lookup = {coverage.name: index for index, coverage in enumerate(problem.coverages)}
+    incompatible_pairs = [
+        (coverage_lookup[rule.coverage_i], coverage_lookup[rule.coverage_j])
+        for rule in problem.compatibility_rules
+        if not rule.compatible
+    ]
+    dependency_pairs = [
+        (coverage_lookup[rule.requires], coverage_lookup[rule.dependent]) for rule in problem.dependency_rules
+    ]
+
+    def is_feasible(bits: Sequence[int]) -> bool:
+        if len(bits) != problem.N:
+            return False
+        for indices in problem.mandatory_families.values():
+            if sum(int(bits[index]) for index in indices) != 1:
+                return False
+        for indices in problem.optional_families.values():
+            if len(indices) > 1 and sum(int(bits[index]) for index in indices) > 1:
+                return False
+        if sum(int(value) for value in bits) > problem.max_options_per_package:
+            return False
+        for left, right in incompatible_pairs:
+            if int(bits[left]) and int(bits[right]):
+                return False
+        for requires_index, dependent_index in dependency_pairs:
+            if int(bits[dependent_index]) and not int(bits[requires_index]):
+                return False
+        return True
+
+    return is_feasible
+
+
+def _count_feasible_samples(
+    bitstring_counts: dict[str, int],
+    n_coverage: int,
+    is_feasible: Callable[[Sequence[int]], bool],
+) -> int:
+    feasible_count = 0
+    for bitstring, count in bitstring_counts.items():
+        coverage_bits = [int(char) for char in bitstring[:n_coverage]]
+        if is_feasible(coverage_bits):
+            feasible_count += int(count)
+    return feasible_count
 
 
 def _log(message: str) -> None:
@@ -487,6 +667,7 @@ def optimize_block_from_seed(
     seed: int,
     initial_theta: np.ndarray,
     execution_target: str = EXECUTION_TARGET,
+    evaluation_callback: base_qaoa.QaoaEvaluationCallback | None = None,
 ) -> base_qaoa.QaoaOptimizationResult:
     theta0 = _coerce_theta(initial_theta, p=p, seed=seed)
 
@@ -530,6 +711,15 @@ def optimize_block_from_seed(
                 improved = True
                 note = "new best"
             trace.record(value, best_stats=best_stats, improved=improved)
+            base_qaoa._emit_evaluation_callback(
+                evaluation_callback,
+                block,
+                evaluation_number,
+                value,
+                best_objective,
+                stats,
+                improved,
+            )
             base_qaoa._report_evaluation(
                 block,
                 evaluation_number,
@@ -594,6 +784,15 @@ def optimize_block_from_seed(
                 best_stats = stats_plus
                 improved_plus = True
             best_plus = trace.record(value_plus, best_stats=best_stats, improved=improved_plus)
+            base_qaoa._emit_evaluation_callback(
+                evaluation_callback,
+                block,
+                evaluation_number,
+                value_plus,
+                best_plus,
+                stats_plus,
+                improved_plus,
+            )
             base_qaoa._report_evaluation(
                 block,
                 evaluation_number,
@@ -629,6 +828,15 @@ def optimize_block_from_seed(
                 best_stats = stats_minus
                 improved_minus = True
             best_minus = trace.record(value_minus, best_stats=best_stats, improved=improved_minus)
+            base_qaoa._emit_evaluation_callback(
+                evaluation_callback,
+                block,
+                evaluation_number_minus,
+                value_minus,
+                best_minus,
+                stats_minus,
+                improved_minus,
+            )
             base_qaoa._report_evaluation(
                 block,
                 evaluation_number_minus,
@@ -656,6 +864,7 @@ def solve_sqaoa_matrix(
     repetitions: int = REPETITIONS,
     execution_target: str = EXECUTION_TARGET,
 ) -> np.ndarray:
+    _ensure_output_dirs()
     workflow_start = time.perf_counter()
     resolved_execution_target = base_qaoa._normalize_execution_target(execution_target)
     if branch_coverages > n:
@@ -664,6 +873,19 @@ def solve_sqaoa_matrix(
         raise ValueError("BRANCH_PACKAGES must be less than or equal to TARGET_PACKAGES")
     _log(f"[sqaoa] Loading instance data from {base_qaoa.DATA_DIR}")
     problem = base_qaoa.subsample_problem(base_qaoa.load_ltm_instance(base_qaoa.DATA_DIR), n_coverages=n, m_packages=m)
+    classical_opt = solve_classical_baseline(n=n, m=m)
+    is_feasible = _build_feasibility_checker(problem)
+    run_id = _build_run_id(
+        n=n,
+        m=m,
+        p=p,
+        t=t,
+        branch_coverages=branch_coverages,
+        branch_packages=branch_packages,
+        repetitions=repetitions,
+        execution_target=resolved_execution_target,
+        optimizer=base_qaoa.OPTIMIZER,
+    )
 
     posterior = learn_adviser_seed(
         n=n,
@@ -678,6 +900,12 @@ def solve_sqaoa_matrix(
 
     blocks = [base_qaoa.build_qubo_block_for_package(problem, package_index) for package_index in range(problem.M)]
     x_matrix = np.zeros((problem.N, problem.M), dtype=int)
+    c_matrix = base_qaoa.make_c_matrix(problem)
+    num_samples_total = 0
+    num_samples_feasible = 0
+    num_objective_evals = 0
+    history_rows: list[dict[str, Any]] = []
+    plot_series: list[tuple[str, list[float], list[float]]] = []
     _log(
         f"[sqaoa] Solving full problem with seeded theta "
         f"{np.array2string(posterior.theta_seed, precision=4, separator=', ')}"
@@ -685,6 +913,47 @@ def solve_sqaoa_matrix(
 
     for package_index, block in enumerate(blocks):
         block_start = time.perf_counter()
+        package_name = (
+            problem.package_names[package_index]
+            if problem.package_names and package_index < len(problem.package_names)
+            else f"package {package_index + 1}"
+        )
+
+        def on_evaluation(
+            callback_block: base_qaoa.QuboBlock,
+            evaluation_index: int,
+            value: float,
+            best_objective: float,
+            stats: base_qaoa.QaoaSampleStats,
+            improved: bool,
+        ) -> None:
+            nonlocal num_samples_total, num_samples_feasible, num_objective_evals
+            shots_total = int(sum(stats.bitstring_counts.values()))
+            shots_feasible = _count_feasible_samples(stats.bitstring_counts, problem.N, is_feasible)
+            num_samples_total += shots_total
+            num_samples_feasible += shots_feasible
+            num_objective_evals += 1
+            history_rows.append(
+                {
+                    "run_id": run_id,
+                    "algorithm": "sqaoa",
+                    "stage": "final_qaoa",
+                    "execution_target": resolved_execution_target,
+                    "optimizer": base_qaoa.OPTIMIZER,
+                    "package_index": int(callback_block.package_index),
+                    "package_name": package_name,
+                    "evaluation_index": int(evaluation_index),
+                    "objective_value": float(value),
+                    "best_objective": float(best_objective),
+                    "best_bitstring": stats.best_bitstring,
+                    "coverage_bitstring": stats.best_bitstring[: problem.N],
+                    "best_qubo_energy": float(stats.best_qubo_energy),
+                    "shots_total": shots_total,
+                    "shots_feasible": shots_feasible,
+                    "improved": int(bool(improved)),
+                }
+            )
+
         result = optimize_block_from_seed(
             block,
             p=p,
@@ -692,16 +961,89 @@ def solve_sqaoa_matrix(
             seed=base_qaoa.SEED + package_index * 1000,
             initial_theta=posterior.theta_seed,
             execution_target=resolved_execution_target,
+            evaluation_callback=on_evaluation,
         )
         coverage_bits = np.array([int(char) for char in result.stats.best_bitstring[: problem.N]], dtype=int)
         x_matrix[:, package_index] = coverage_bits
+        plot_series.append(
+            (
+                package_name,
+                result.trace.objective_values,
+                result.trace.best_objective_values,
+            )
+        )
         _log(
             f"[sqaoa] Package {package_index + 1}/{problem.M} finished in "
             f"{time.perf_counter() - block_start:.2f}s with best sample "
             f"{result.stats.best_bitstring[:problem.N]}"
         )
 
-    _log(f"[sqaoa] Finished workflow in {time.perf_counter() - workflow_start:.2f}s")
+    runtime_sec = time.perf_counter() - workflow_start
+    best_profit = float(np.sum(c_matrix * x_matrix))
+    coverage_names = [coverage.name for coverage in problem.coverages]
+    package_names = problem.package_names or [f"package {index + 1}" for index in range(problem.M)]
+    stem = run_id
+
+    solution_path = _write_solution_matrix_csv(
+        _path_for_csv(SOLUTIONS_DIR, f"{stem}_solution"),
+        matrix=x_matrix,
+        coverage_names=coverage_names,
+        package_names=package_names,
+    )
+    history_path = _write_csv_rows(
+        _path_for_csv(HISTORIES_DIR, f"{stem}_history"),
+        HISTORY_FIELDS,
+        history_rows,
+    )
+    plot_path = save_training_loss_plot(
+        plot_series,
+        PLOTS_DIR / f"{stem}_training_loss.png",
+        title="SQAOA Final-Stage Training Loss",
+    )
+
+    posterior_token = ",".join(f"{idx}:{prob:.4f}" for idx, prob in enumerate(posterior.adviser_probabilities))
+    summary_row = {
+        "run_id": run_id,
+        "algorithm": "sqaoa",
+        "execution_target": resolved_execution_target,
+        "optimizer": base_qaoa.OPTIMIZER,
+        "seed": int(base_qaoa.SEED),
+        "n": int(n),
+        "m": int(m),
+        "p": int(p),
+        "t": int(t),
+        "branch_coverages": int(branch_coverages),
+        "branch_packages": int(branch_packages),
+        "repetitions": int(repetitions),
+        "runtime_sec": float(runtime_sec),
+        "best_profit": best_profit,
+        "classical_opt_profit": float(classical_opt["profit"]),
+        "num_samples_total": int(num_samples_total),
+        "num_samples_feasible": int(num_samples_feasible),
+        "num_samples_postselected": int(posterior.accepted_shots),
+        "num_objective_evals": int(num_objective_evals),
+        "solution_path": _path_to_repo_relative_string(solution_path),
+        "history_path": _path_to_repo_relative_string(history_path),
+        "plot_path": _path_to_repo_relative_string(plot_path),
+        "notes": (
+            f"total_scored_postselection_shots={posterior.total_scored_shots}; "
+            f"mean_energy_threshold={posterior.mean_energy_threshold:.6f}; "
+            f"variance_threshold={posterior.variance_threshold:.6f}; "
+            f"adviser_posterior={posterior_token}"
+        ),
+    }
+    summary_path = _write_csv_rows(
+        _path_for_csv(SUMMARIES_DIR, f"{stem}_summary"),
+        SUMMARY_FIELDS,
+        [summary_row],
+    )
+    _append_csv_row(RUN_SUMMARY_INDEX_PATH, SUMMARY_FIELDS, summary_row)
+
+    _log(f"[sqaoa] Saved summary to {_path_to_repo_relative_string(summary_path)}")
+    _log(f"[sqaoa] Saved solution to {_path_to_repo_relative_string(solution_path)}")
+    _log(f"[sqaoa] Saved history to {_path_to_repo_relative_string(history_path)}")
+    _log(f"[sqaoa] Saved plot to {_path_to_repo_relative_string(plot_path)}")
+    _log(f"[sqaoa] Finished workflow in {runtime_sec:.2f}s")
     return x_matrix
 
 

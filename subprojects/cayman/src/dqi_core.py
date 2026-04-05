@@ -345,3 +345,9 @@ def sample_dqi(
 def bitstring_to_array(bitstring: str) -> np.ndarray:
     """Convert a bitstring like '101' to float array [1., 0., 1.]."""
     return np.array([float(int(ch)) for ch in bitstring], dtype=float)
+
+
+def array_to_bitstring(x: np.ndarray) -> str:
+    """Binary vector to bitstring (index 0 = leftmost character)."""
+    v = np.asarray(x, dtype=float).ravel()
+    return "".join("1" if float(t) > 0.5 else "0" for t in v)
