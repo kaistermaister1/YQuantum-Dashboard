@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Editor / OS
+.DS_Store
+*~
+
+# Office lock/temp
+~$*
+
+# Local build artifact (Raylib)
+qubo_vis/qubo_vis
+qubo_vis/qubo_vis.exe

@@ -1,6 +1,3 @@
-# Nested clone of official challenge repo (separate git history)
-Travelers/
-
 .DS_Store
 
 node_modules
