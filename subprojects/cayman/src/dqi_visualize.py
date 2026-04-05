@@ -9,7 +9,7 @@ import numpy as np
 
 
 def plot_convergence(history: list[float], *, out_path: Path | None = None, title: str = "DQI convergence"):
-    """Plot objective value across optimizer evaluations."""
+    """Plot objective values; for one-shot DQI this is typically a single point."""
     if not history:
         raise ValueError("history must not be empty")
     xs = np.arange(1, len(history) + 1, dtype=int)

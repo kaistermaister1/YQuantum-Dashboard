@@ -59,14 +59,13 @@ def run_kernel_nexus(
         from quantinuum_schemas.models.backend_config import HeliosConfig, SeleneConfig
     except ImportError as exc:
         raise ImportError(
-            "Nexus execution requires qnexus (and its dependencies). "
-            "Install with: pip install qnexus"
+            "qnexus is required for Nexus execution (listed in cayman requirements.txt)."
         ) from exc
 
     kernel.check()
     pkg = kernel.compile()
     dqi_test_project = qnexus.projects.get_or_create(name="dqi-test")
-    ref = qnexus.hugr.upload(pkg, name=hugr_name,project=dqi_test_project)
+    ref = qnexus.hugr.upload(pkg, name=hugr_name, project=dqi_test_project)
     cfg = (
         HeliosConfig(system_name=helios_system_name)
         if mode == "helios"

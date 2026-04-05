@@ -253,13 +253,8 @@ def sample_dqi(
 ) -> DqiSampleStats:
     """Run a DQI circuit with fixed parameters and return sampled statistics.
 
-    ``execution``:
-        - ``local`` / ``selene`` — Guppy emulator on this machine (default).
-        - ``nexus_selene`` — Nexus job with ``SeleneConfig`` (cloud Selene emulator).
-        - ``nexus_helios`` — Nexus job with ``HeliosConfig`` (set ``nexus_helios_system``).
-
-    Nexus runs require ``qnexus`` login, an active project, and unique HUGR/job names per
-    submission when optimizing (use ``eval_tag``, set automatically by ``optimize_dqi``).
+    ``execution``: ``nexus_selene`` (default), ``nexus_helios``, or ``local`` / ``selene``.
+    For parallel jobs, use distinct HUGR/job names or ``eval_tag``.
     """
     import_guppylang_with_workaround()
 

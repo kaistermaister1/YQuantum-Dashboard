@@ -8,6 +8,8 @@ numpy>=1.24
 scipy>=1.10
 matplotlib>=3.7
 guppylang
-
-# Optional: Nexus cloud execution
-# qnexus
+# guppylang-internals 0.32.x expects hugr<0.16 (.extensions as dict, register_updated).
+# qnexus>=0.42 otherwise resolves hugr 0.16+ and kernel.compile() raises AttributeError.
+hugr>=0.14,<0.16
+# Nexus client for default DQI execution (must resolve with hugr<0.16 above).
+qnexus>=0.38,<0.42

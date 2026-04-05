@@ -1,9 +1,17 @@
-"""Smoke tests for the run_dqi API."""
+"""Smoke tests for ``run_dqi`` (default backend: Nexus Selene).
+
+Run: ``python -m unittest tests.test_run_dqi_smoke -v``
+
+Overrides: ``DQI_SMOKE_EXECUTION=local`` (on-machine Selene), ``nexus_helios`` +
+``DQI_NEXUS_HELIOS_SYSTEM``; ``DQI_NEXUS_TIMEOUT`` (seconds, default 600).
+"""
 
 from __future__ import annotations
 
+import os
 import sys
 import unittest
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +22,11 @@ if str(ROOT) not in sys.path:
 
 from src.dqi_core import import_guppylang_with_workaround
 from src.run_dqi import run_dqi, run_dqi_with_details
+
+try:
+    from qnexus.exceptions import AuthenticationError as _QnxAuthenticationError
+except ImportError:  # pragma: no cover
+    _QnxAuthenticationError = None
 
 try:
     import_guppylang_with_workaround()
@@ -32,6 +45,43 @@ def _skip_if_selene_env_missing(exc: BaseException) -> None:
         ) from exc
 
 
+def _maybe_skip_from_nexus_or_selene(exc: BaseException) -> None:
+    if _QnxAuthenticationError is not None and isinstance(exc, _QnxAuthenticationError):
+        raise unittest.SkipTest("Nexus authentication failed.") from exc
+    if isinstance(exc, ImportError):
+        msg = str(exc).lower()
+        if "qnexus" in msg or "nexus" in msg:
+            raise unittest.SkipTest("qnexus import failed (check cayman requirements.txt).") from exc
+    if isinstance(exc, RuntimeError):
+        _skip_if_selene_env_missing(exc)
+
+
+def _smoke_execution() -> str:
+    raw = os.environ.get("DQI_SMOKE_EXECUTION", "nexus_selene").strip().lower().replace("-", "_")
+    if raw in ("local", "selene", "nexus_selene", "nexus_helios"):
+        return raw if raw != "selene" else "local"
+    raise unittest.SkipTest(
+        f"Invalid DQI_SMOKE_EXECUTION={raw!r}; use local, nexus_selene, or nexus_helios"
+    )
+
+
+def _smoke_run_kwargs() -> dict:
+    execution = _smoke_execution()
+    if execution == "local":
+        return {"execution": "local"}
+    tag = uuid.uuid4().hex[:12]
+    timeout = float(os.environ.get("DQI_NEXUS_TIMEOUT", "600"))
+    kw: dict = {
+        "execution": execution,
+        "nexus_hugr_name": f"dqi-smoke-{tag}",
+        "nexus_job_name": f"dqi-smoke-{tag}",
+        "nexus_timeout": timeout,
+    }
+    if execution == "nexus_helios":
+        kw["nexus_helios_system"] = os.environ.get("DQI_NEXUS_HELIOS_SYSTEM", "Helios-1")
+    return kw
+
+
 @unittest.skipIf(
     not _guppy_ok,
     "guppylang unavailable (not installed or wasmtime failed to load)",
@@ -43,15 +93,13 @@ class TestRunDqiSmoke(unittest.TestCase):
             x, value = run_dqi(
                 Q,
                 p=1,
-                optimizer="random",
-                n_samples=8,
                 shots=128,
                 seed=3,
-                rng_seed=4,
                 max_qubits=8,
+                **_smoke_run_kwargs(),
             )
-        except RuntimeError as e:
-            _skip_if_selene_env_missing(e)
+        except Exception as e:
+            _maybe_skip_from_nexus_or_selene(e)
             raise
         self.assertEqual(x.shape, (2,))
         self.assertTrue(np.all((x == 0.0) | (x == 1.0)))
@@ -74,15 +122,13 @@ class TestRunDqiSmoke(unittest.TestCase):
             x, value, meta = run_dqi_with_details(
                 block,
                 p=1,
-                optimizer="random",
-                n_samples=6,
                 shots=96,
                 seed=2,
-                rng_seed=5,
                 max_qubits=8,
+                **_smoke_run_kwargs(),
             )
-        except RuntimeError as e:
-            _skip_if_selene_env_missing(e)
+        except Exception as e:
+            _maybe_skip_from_nexus_or_selene(e)
             raise
         self.assertEqual(x.shape, (2,))
         self.assertIsNotNone(meta.coverage_bits)

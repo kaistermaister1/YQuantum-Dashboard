@@ -1,11 +1,10 @@
-"""Classical optimization loops for DQI angle parameters."""
+"""Classical optimization loops and single-shot DQI (fixed angles, no optimizer)."""
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Literal
-import qnexus
+from typing import Literal, Sequence
 
 import numpy as np
 
@@ -18,6 +17,19 @@ OptimizerName = Literal["random", "cobyla", "spsa"]
 @dataclass
 class DqiOptimizationResult:
     """Best parameter set and associated sampling statistics."""
+
+    gammas: list[float]
+    betas: list[float]
+    objective_value: float
+    statistic: Statistic
+    stats_at_best: DqiSampleStats
+    n_evaluations: int
+    history: list[float]
+
+
+@dataclass
+class DqiRunResult:
+    """Fixed-angle DQI run: one kernel execution and sample statistics."""
 
     gammas: list[float]
     betas: list[float]
@@ -109,7 +121,6 @@ def optimize_dqi(
         vec = _clip_params(theta, p)
         gammas = [float(v) for v in vec[:p]]
         betas = [float(v) for v in vec[p:]]
-        project = qnexus.projects.get_or_create(name="dqi-test")
         stats = sample_dqi(
             q,
             gammas=gammas,
@@ -125,7 +136,6 @@ def optimize_dqi(
             nexus_helios_system=nexus_helios_system,
             nexus_timeout=nexus_timeout,
             eval_tag=str(eval_idx),
-            project=project,
         )
         obj = _objective(q, stats, statistic=statistic, constant_offset=constant_offset)
         history.append(float(obj))
@@ -187,7 +197,6 @@ def optimize_dqi(
         raise ValueError(f"Unsupported optimizer: {optimizer}")
 
     if best_stats is None:
-        # Fallback for any unexpected empty loop configuration.
         obj, stats = evaluate(theta0)
         accept(theta0, obj, stats)
         assert best_stats is not None
@@ -200,4 +209,76 @@ def optimize_dqi(
         stats_at_best=best_stats,
         n_evaluations=int(eval_idx),
         history=history,
+    )
+
+
+def _default_angles(p: int) -> tuple[list[float], list[float]]:
+    half_pi = 0.5 * math.pi
+    return [half_pi] * int(p), [half_pi] * int(p)
+
+
+def run_dqi_oneshot(
+    Q: np.ndarray,
+    p: int,
+    *,
+    gammas: Sequence[float] | None = None,
+    betas: Sequence[float] | None = None,
+    statistic: Statistic = "mean",
+    shots: int = 512,
+    seed: int = 0,
+    mixer: str = "h",
+    max_qubits: int = 50,
+    constant_offset: float = 0.0,
+    execution: str = "nexus_selene",
+    nexus_hugr_name: str = "dqi-hugr",
+    nexus_job_name: str = "dqi-execute",
+    nexus_helios_system: str = "Helios-1",
+    nexus_timeout: float | None = 300.0,
+) -> DqiRunResult:
+    """Run DQI once with fixed angles (interference from cost phases + mixer, default Hadamard).
+
+    There is no classical optimization loop; angles default to π/2 per layer unless ``gammas`` /
+    ``betas`` are provided.
+    """
+    if p < 1:
+        raise ValueError("p must be >= 1")
+    q = np.asarray(Q, dtype=float)
+    if q.shape[0] != q.shape[1]:
+        raise ValueError("Q must be square")
+
+    if gammas is None and betas is None:
+        g_list, b_list = _default_angles(p)
+    else:
+        if gammas is None or betas is None:
+            raise ValueError("Provide both gammas and betas, or neither for defaults")
+        g_list = [float(v) for v in gammas]
+        b_list = [float(v) for v in betas]
+        if len(g_list) != p or len(b_list) != p:
+            raise ValueError(f"gammas and betas must each have length p={p}")
+
+    stats = sample_dqi(
+        q,
+        gammas=g_list,
+        betas=b_list,
+        shots=int(shots),
+        seed=int(seed),
+        mixer=mixer,
+        max_qubits=max_qubits,
+        constant_offset=constant_offset,
+        execution=execution,
+        nexus_hugr_name=nexus_hugr_name,
+        nexus_job_name=nexus_job_name,
+        nexus_helios_system=nexus_helios_system,
+        nexus_timeout=nexus_timeout,
+        eval_tag="",
+    )
+    obj = _objective(q, stats, statistic=statistic, constant_offset=constant_offset)
+    return DqiRunResult(
+        gammas=g_list,
+        betas=b_list,
+        objective_value=float(obj),
+        statistic=statistic,
+        stats_at_best=stats,
+        n_evaluations=1,
+        history=[float(obj)],
     )

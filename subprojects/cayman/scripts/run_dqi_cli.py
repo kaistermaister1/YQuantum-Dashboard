@@ -50,22 +50,23 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--subsample-coverages", type=int, default=0)
     ap.add_argument("--subsample-packages", type=int, default=0)
 
-    ap.add_argument("--p", type=int, default=1, help="DQI depth/layers")
-    ap.add_argument("--optimizer", choices=["random", "cobyla", "spsa"], default="cobyla")
+    ap.add_argument("--p", type=int, default=1, help="DQI depth/layers (fixed angles, one shot)")
     ap.add_argument("--statistic", choices=["mean", "best"], default="mean")
-    ap.add_argument("--mixer", choices=["rx", "h"], default="rx")
+    ap.add_argument(
+        "--mixer",
+        choices=["rx", "h"],
+        default="h",
+        help="Mixer after each cost layer; 'h' uses Hadamard interference (default).",
+    )
     ap.add_argument("--shots", type=int, default=512)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--rng-seed", type=int, default=0)
-    ap.add_argument("--maxiter", type=int, default=60)
-    ap.add_argument("--n-samples", type=int, default=64)
     ap.add_argument("--max-qubits", type=int, default=50)
 
     ap.add_argument(
         "--execution",
         choices=["local", "selene", "nexus-selene", "nexus-helios"],
-        default="local",
-        help="local/selene: Guppy emulator on this machine; nexus-*: Quantinuum Nexus (login + project).",
+        default="nexus-selene",
+        help="Default nexus-selene; use local/selene for on-machine emulation.",
     )
     ap.add_argument("--nexus-hugr-name", default="dqi-hugr", help="HUGR upload name prefix (eval index appended).")
     ap.add_argument("--nexus-job-name", default="dqi-execute", help="Execute job name prefix (eval index appended).")
@@ -115,12 +116,8 @@ def main() -> int:
     best_x, best_value, meta = run_dqi_with_details(
         target,
         p=args.p,
-        optimizer=args.optimizer,
         shots=args.shots,
         seed=args.seed,
-        rng_seed=args.rng_seed,
-        maxiter=args.maxiter,
-        n_samples=args.n_samples,
         statistic=args.statistic,
         mixer=args.mixer,
         max_qubits=args.max_qubits,
@@ -138,13 +135,13 @@ def main() -> int:
     print("hamming weight (full):", meta.hamming_weight_full)
     if meta.hamming_weight_coverage is not None:
         print("hamming weight (coverage bits):", meta.hamming_weight_coverage)
-    print("optimizer evaluations:", meta.optimizer_result.n_evaluations)
+    print("circuit executions:", meta.run_result.n_evaluations)
 
     if args.save_plots:
-        conv_path = args.out_dir / "dqi_convergence.png"
+        conv_path = args.out_dir / "dqi_objective.png"
         hist_path = args.out_dir / "dqi_histogram.png"
-        plot_convergence(meta.optimizer_result.history, out_path=conv_path)
-        plot_bitstring_histogram(meta.optimizer_result.stats_at_best.bitstring_counts, out_path=hist_path)
+        plot_convergence(meta.run_result.history, out_path=conv_path, title="DQI one-shot objective")
+        plot_bitstring_histogram(meta.run_result.stats_at_best.bitstring_counts, out_path=hist_path)
         print("wrote:", conv_path)
         print("wrote:", hist_path)
 
@@ -152,13 +149,13 @@ def main() -> int:
         bench = benchmark_dqi_pipeline(
             target,
             p=args.p,
-            optimizer=args.optimizer,
             shots=args.shots,
             dqi_seed=args.seed,
-            random_seed=args.rng_seed,
+            random_seed=args.seed,
             brute_force_max_n=args.bruteforce_max_n,
             random_samples=args.random_samples,
             include_qaoa_baseline=not args.no_qaoa_baseline,
+            mixer=args.mixer,
         )
         print("\n=== Benchmarks ===")
         for name, res in bench.items():
