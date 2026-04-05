@@ -1,0 +1,199 @@
+{
+  "ell_values": [
+    1,
+    2,
+    3,
+    4
+  ],
+  "bp_values": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "shots": 128,
+  "seed": 0,
+  "rows": [
+    {
+      "ell": 1,
+      "bp_iterations": 0,
+      "expected_f": -0.22580645161290322,
+      "expected_s": 2.3870967741935485,
+      "keep_rate": 0.484375,
+      "postselected_shots": 62,
+      "total_shots": 128
+    },
+    {
+      "ell": 2,
+      "bp_iterations": 0,
+      "expected_f": 0.5454545454545454,
+      "expected_s": 2.772727272727273,
+      "keep_rate": 0.171875,
+      "postselected_shots": 22,
+      "total_shots": 128
+    },
+    {
+      "ell": 3,
+      "bp_iterations": 0,
+      "expected_f": 0.0,
+      "expected_s": 2.5,
+      "keep_rate": 0.0625,
+      "postselected_shots": 8,
+      "total_shots": 128
+    },
+    {
+      "ell": 4,
+      "bp_iterations": 0,
+      "expected_f": 1.8,
+      "expected_s": 3.4,
+      "keep_rate": 0.0390625,
+      "postselected_shots": 5,
+      "total_shots": 128
+    },
+    {
+      "ell": 1,
+      "bp_iterations": 1,
+      "expected_f": 1.7964601769911503,
+      "expected_s": 3.398230088495575,
+      "keep_rate": 0.8828125,
+      "postselected_shots": 113,
+      "total_shots": 128
+    },
+    {
+      "ell": 2,
+      "bp_iterations": 1,
+      "expected_f": 3.0,
+      "expected_s": 4.0,
+      "keep_rate": 0.7734375,
+      "postselected_shots": 99,
+      "total_shots": 128
+    },
+    {
+      "ell": 3,
+      "bp_iterations": 1,
+      "expected_f": 3.765432098765432,
+      "expected_s": 4.382716049382716,
+      "keep_rate": 0.6328125,
+      "postselected_shots": 81,
+      "total_shots": 128
+    },
+    {
+      "ell": 4,
+      "bp_iterations": 1,
+      "expected_f": 3.875,
+      "expected_s": 4.4375,
+      "keep_rate": 0.5,
+      "postselected_shots": 64,
+      "total_shots": 128
+    },
+    {
+      "ell": 1,
+      "bp_iterations": 2,
+      "expected_f": 1.796875,
+      "expected_s": 3.3984375,
+      "keep_rate": 1.0,
+      "postselected_shots": 128,
+      "total_shots": 128
+    },
+    {
+      "ell": 2,
+      "bp_iterations": 2,
+      "expected_f": 3.3716814159292037,
+      "expected_s": 4.185840707964601,
+      "keep_rate": 0.8828125,
+      "postselected_shots": 113,
+      "total_shots": 128
+    },
+    {
+      "ell": 3,
+      "bp_iterations": 2,
+      "expected_f": 3.62,
+      "expected_s": 4.31,
+      "keep_rate": 0.78125,
+      "postselected_shots": 100,
+      "total_shots": 128
+    },
+    {
+      "ell": 4,
+      "bp_iterations": 2,
+      "expected_f": 3.742857142857143,
+      "expected_s": 4.371428571428571,
+      "keep_rate": 0.546875,
+      "postselected_shots": 70,
+      "total_shots": 128
+    },
+    {
+      "ell": 1,
+      "bp_iterations": 3,
+      "expected_f": 2.234375,
+      "expected_s": 3.6171875,
+      "keep_rate": 1.0,
+      "postselected_shots": 128,
+      "total_shots": 128
+    },
+    {
+      "ell": 2,
+      "bp_iterations": 3,
+      "expected_f": 3.1153846153846154,
+      "expected_s": 4.0576923076923075,
+      "keep_rate": 0.8125,
+      "postselected_shots": 104,
+      "total_shots": 128
+    },
+    {
+      "ell": 3,
+      "bp_iterations": 3,
+      "expected_f": 3.7311827956989245,
+      "expected_s": 4.365591397849462,
+      "keep_rate": 0.7265625,
+      "postselected_shots": 93,
+      "total_shots": 128
+    },
+    {
+      "ell": 4,
+      "bp_iterations": 3,
+      "expected_f": 4.189873417721519,
+      "expected_s": 4.594936708860759,
+      "keep_rate": 0.6171875,
+      "postselected_shots": 79,
+      "total_shots": 128
+    },
+    {
+      "ell": 1,
+      "bp_iterations": 4,
+      "expected_f": 2.328125,
+      "expected_s": 3.6640625,
+      "keep_rate": 1.0,
+      "postselected_shots": 128,
+      "total_shots": 128
+    },
+    {
+      "ell": 2,
+      "bp_iterations": 4,
+      "expected_f": 3.311926605504587,
+      "expected_s": 4.155963302752293,
+      "keep_rate": 0.8515625,
+      "postselected_shots": 109,
+      "total_shots": 128
+    },
+    {
+      "ell": 3,
+      "bp_iterations": 4,
+      "expected_f": 3.4693877551020407,
+      "expected_s": 4.23469387755102,
+      "keep_rate": 0.765625,
+      "postselected_shots": 98,
+      "total_shots": 128
+    },
+    {
+      "ell": 4,
+      "bp_iterations": 4,
+      "expected_f": 4.0,
+      "expected_s": 4.5,
+      "keep_rate": 0.5625,
+      "postselected_shots": 72,
+      "total_shots": 128
+    }
+  ]
+}
