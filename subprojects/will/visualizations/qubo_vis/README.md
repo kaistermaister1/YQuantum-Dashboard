@@ -14,16 +14,15 @@ From `Travelers/code_examples` (paths relative to `subprojects/will/`):
 
 ```bash
 cd Travelers/code_examples
-# Use the project venv if system Python lacks PuLP:
 PY=./.venv/bin/python
+# Full YQH26 instance: 20 coverages (committed `qubo_surface.txt` is generated this way).
 PYTHONPATH=src $PY ../../visualizations/qubo_vis/scripts/export_qubo_surface.py \
   --data-dir ../docs/data/YQH26_data \
   --package 0 \
-  --subsample-coverages 10 --subsample-packages 3 \
   -o ../../visualizations/qubo_vis/qubo_surface.txt
 ```
 
-Omit subsampling for the full block (large \(n\) → dense mesh; better for screenshots of sparsity structure at moderate \(n\)).
+Optional smaller mesh for quick tests: add `--subsample-coverages 10 --subsample-packages 3` (both required if either is set). Full export yields larger \(n\) (coverages + slacks) and matches the **20** coverage lines in `instance_coverages.csv`.
 
 ## 2. Build the viewer
 
@@ -44,6 +43,8 @@ Linux: install `libraylib-dev` (or equivalent) so `pkg-config raylib` works, the
 ```
 
 **Controls:** left-drag orbit, scroll zoom, **WASD** pan, **SPACE** recenter target, **R** toggle slow auto-spin (useful for video), **I** show/hide the right-hand info/legend panel (hidden by default), **Q** toggle **Print Q** (heatmap of the full matrix: blue = negative, red = positive, scaled by max\|Q\|; hover a cell for the exact value). While the mouse is over that panel, camera drag/zoom/pan is disabled so you can read the matrix.
+
+**Story steps (arrow keys):** **←** / **→** move through **three** scenes. **0** — **\(n_{\mathrm{coverage}}\)** marbles **drop in white** (`marbleNeutralWire` / `marbleNeutralFill`). **1** — still story step 1: **(a)** smooth blend from white to **family colors** (`01_insurance_bundling.html`, `CoverageFamilyColorBundlingHtml`), **(b)** **~0.5 s** hold, **(c)** slide on the floor to **family clusters** (3×3 anchors + ring per family). Timing: `kFamilyColorBlendSec`, `kFamilyPauseAfterColorSec`, `kFamilyGroupMoveSec` in `main.cpp`. **←** from Q block to step 1 **skips** the entrance (final grouped pose). **2** — **Q block** mesh. Fixed-seed drop order on step 0.
 
 ## File format (`qubo_surface.txt`)
 
