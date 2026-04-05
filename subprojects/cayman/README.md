@@ -21,6 +21,23 @@ The kernel then:
 
 **Caveats:** the GF(2) rows are **necessary but not sufficient** for the full integer slack equalities (see docstring in [`dqi_insurance_parity.py`](src/dqi_insurance_parity.py)). There is **no** BP decoder stage yet—only algebraic filtering.
 
+### 3. dqi-main compatible BP mode (new)
+
+You can enable a Qiskit-based compatibility path with:
+
+- `--bp-decoder` (`run_dqi_cli.py` / `benchmark_dqi_official_sizes.py`)
+- `--bp-iterations <int>`
+
+This mode follows the `dqi-main` structure more closely:
+
+1. weighted unary encoding (`W_k`)
+2. Unk/Dicke-style preparation on the `y` register
+3. BP1 circuit composition for uncompute
+4. post-selection on **`y=0` and clean ancillas**
+
+Implementation entrypoint: [`src/dqi_bp_compat.py`](src/dqi_bp_compat.py).
+Requires local Qiskit simulation (`--execution local`) and installed `qiskit` + `qiskit-aer`.
+
 ## Comparing to sponsor starter code (when the repo is available)
 
 | Aspect | Cayman parity+DQI path | Typical deck narrative |

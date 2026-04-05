@@ -20,6 +20,7 @@ from src.dqi_backends import (
     run_kernel_local,
     run_kernel_nexus,
 )
+from src.dqi_bp_compat import run_dqi_bp_histogram
 from src.dqi_dicke_prep import append_dicke_state_lines
 from src.dqi_insurance_parity import postselect_bitstring_counts
 
@@ -327,6 +328,8 @@ def sample_dqi(
     parity_rhs: np.ndarray | None = None,
     dicke_k: int | None = None,
     n_coverage: int | None = None,
+    use_bp_decoder: bool = False,
+    bp_iterations: int = 1,
 ) -> DqiSampleStats:
     """Run a DQI circuit with fixed parameters and return sampled statistics.
 
@@ -371,6 +374,54 @@ def sample_dqi(
 
     if n_total > int(max_qubits):
         raise ValueError(f"n_qubits={n_total} exceeds max_qubits={max_qubits}")
+
+    if use_bp_decoder:
+        if not use_parity or parity_rhs is None or Bm is None:
+            raise ValueError("BP decoder mode requires B and parity_rhs")
+        backend = normalize_execution(execution)
+        if backend != "local":
+            raise ValueError(
+                "BP-compatible dqi-main path is local Qiskit simulation only. "
+                "Use execution='local' or 'selene'."
+            )
+        ell = int(dicke_k) if dicke_k is not None else max(1, min(3, int(Bm.shape[0] // 2)))
+        bp_counts, keep_rate, raw_qiskit_counts = run_dqi_bp_histogram(
+            Bm,
+            rhs,
+            ell=ell,
+            num_iterations_bp=int(bp_iterations),
+            shots=int(shots),
+            seed=int(seed),
+        )
+        if not bp_counts:
+            bp_counts = {k: 0 for k in bp_counts}
+        best_s: str | None = None
+        best_val = float("inf")
+        for s in bp_counts:
+            x = np.array([float(int(ch)) for ch in s], dtype=float)
+            e = qubo_energy(x, q, constant_offset=constant_offset)
+            if e < best_val:
+                best_val = e
+                best_s = s
+        if best_s is None:
+            # fallback to all-zero if post-selection removed all outcomes
+            best_s = "0" * n_prob
+            best_val = qubo_energy(np.zeros(n_prob, dtype=float), q, constant_offset=constant_offset)
+            bp_counts = {best_s: 1}
+            keep_rate = 0.0
+        return DqiSampleStats(
+            n_qubits=n_prob,
+            p=len(gammas),
+            shots=int(shots),
+            gammas=[float(v) for v in gammas],
+            betas=[float(v) for v in betas],
+            bitstring_counts=bp_counts,
+            best_bitstring=best_s,
+            best_value=float(best_val),
+            constant_offset=float(constant_offset),
+            post_selection_rate=float(keep_rate),
+            raw_bitstring_counts=raw_qiskit_counts,
+        )
 
     _, c_z, zz = qubo_to_ising(q)
     if use_parity:

@@ -156,6 +156,8 @@ def benchmark_dqi_pipeline(
     nexus_timeout: float | None = 300.0,
     insurance_parity: tuple[Any, int] | None = None,
     dicke_k: int | None = None,
+    use_bp_decoder: bool = False,
+    bp_iterations: int = 1,
     progress_callback: Callable[[dict[str, BenchmarkResult]], None] | None = None,
 ) -> dict[str, BenchmarkResult]:
     """Run DQI + baselines and return comparable metrics.
@@ -192,6 +194,8 @@ def benchmark_dqi_pipeline(
         nexus_timeout=nexus_timeout,
         insurance_parity=insurance_parity,
         dicke_k=dicke_k,
+        use_bp_decoder=use_bp_decoder,
+        bp_iterations=bp_iterations,
     )
     dqi_runtime = time.perf_counter() - t0
     results["dqi"] = BenchmarkResult(

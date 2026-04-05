@@ -83,6 +83,8 @@ def run_dqi_oneshot(
     parity_rhs: np.ndarray | None = None,
     dicke_k: int | None = None,
     n_coverage: int | None = None,
+    use_bp_decoder: bool = False,
+    bp_iterations: int = 1,
 ) -> DqiRunResult:
     """Run DQI once with fixed angles (interference from cost phases + mixer, default Hadamard).
 
@@ -124,6 +126,8 @@ def run_dqi_oneshot(
         parity_rhs=parity_rhs,
         dicke_k=dicke_k,
         n_coverage=n_coverage,
+        use_bp_decoder=use_bp_decoder,
+        bp_iterations=bp_iterations,
     )
     obj = _objective(q, stats, statistic=statistic, constant_offset=constant_offset)
     return DqiRunResult(

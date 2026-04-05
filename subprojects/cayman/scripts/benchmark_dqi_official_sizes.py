@@ -149,6 +149,12 @@ def parse_args() -> argparse.Namespace:
             "Default: min(K, n_coverages_in_row)."
         ),
     )
+    ap.add_argument(
+        "--bp-decoder",
+        action="store_true",
+        help="Use dqi-main-compatible BP pipeline (Qiskit local simulation only).",
+    )
+    ap.add_argument("--bp-iterations", type=int, default=1, help="Belief-propagation iterations in --bp-decoder mode.")
     ap.add_argument("--out-dir", type=Path, default=None, help="Default: cayman/artifacts/benchmark_official")
     ap.add_argument("--include-qaoa", action="store_true", help="QAOA baseline for n<=50 only")
     ap.add_argument(
@@ -292,6 +298,8 @@ def main() -> int:
 
     exec_key = str(args.execution).replace("-", "_")
     local_selene = exec_key in ("local", "selene")
+    if args.bp_decoder and not local_selene:
+        raise ValueError("--bp-decoder requires --execution local (Qiskit simulation path).")
     nexus_timeout = None if args.nexus_no_timeout else float(args.nexus_timeout)
     selene_limit = max(1, int(args.nexus_selene_max_qubits))
 
@@ -361,6 +369,8 @@ def main() -> int:
                         if args.dicke_k is not None
                         else int(min(small_problem.max_options_per_package, small_problem.N))
                     ),
+                    use_bp_decoder=bool(args.bp_decoder),
+                    bp_iterations=int(args.bp_iterations),
                 )
             except TimeoutError:
                 print(

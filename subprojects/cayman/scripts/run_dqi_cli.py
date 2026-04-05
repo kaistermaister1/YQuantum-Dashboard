@@ -96,6 +96,12 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="With --insurance-parity: Hamming weight for Dicke prep on coverage qubits (omit for uniform H).",
     )
+    ap.add_argument(
+        "--bp-decoder",
+        action="store_true",
+        help="Use dqi-main-compatible BP pipeline (Qiskit local simulation, y=0+ancilla post-selection).",
+    )
+    ap.add_argument("--bp-iterations", type=int, default=1, help="Belief-propagation iterations in --bp-decoder mode.")
 
     ap.add_argument("--benchmark", action="store_true", help="Run baseline comparisons")
     ap.add_argument("--no-qaoa-baseline", action="store_true")
@@ -132,6 +138,8 @@ def main() -> int:
 
     nexus_timeout = None if args.nexus_no_timeout else float(args.nexus_timeout)
     exec_key = args.execution.replace("-", "_")
+    if args.bp_decoder and exec_key not in ("local", "selene"):
+        raise ValueError("--bp-decoder requires --execution local (Qiskit simulation path).")
 
     best_x, best_value, meta = run_dqi_with_details(
         target,
@@ -148,6 +156,8 @@ def main() -> int:
         nexus_timeout=nexus_timeout,
         insurance_parity=ins_par,
         dicke_k=args.dicke_k,
+        use_bp_decoder=bool(args.bp_decoder),
+        bp_iterations=int(args.bp_iterations),
     )
 
     print("=== DQI Result ===")

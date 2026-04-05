@@ -74,6 +74,8 @@ def run_dqi(
     dicke_k: int | None = None,
     n_coverage: int | None = None,
     insurance_parity: tuple[BundlingProblem, int] | None = None,
+    use_bp_decoder: bool = False,
+    bp_iterations: int = 1,
 ) -> tuple[np.ndarray, float]:
     """Run DQI once; default ``execution`` is ``nexus_selene`` (use ``local`` for on-machine Selene).
 
@@ -110,6 +112,8 @@ def run_dqi(
         parity_rhs=rhs_use,
         dicke_k=dicke_k,
         n_coverage=n_cov_use,
+        use_bp_decoder=use_bp_decoder,
+        bp_iterations=bp_iterations,
     )
     best_x = bitstring_to_array(res.stats_at_best.best_bitstring)
     return best_x, float(res.stats_at_best.best_value)
@@ -136,6 +140,8 @@ def run_dqi_with_details(
     dicke_k: int | None = None,
     n_coverage: int | None = None,
     insurance_parity: tuple[BundlingProblem, int] | None = None,
+    use_bp_decoder: bool = False,
+    bp_iterations: int = 1,
 ) -> tuple[np.ndarray, float, DqiRunMetadata]:
     """Run DQI once; returns metadata. Default ``execution`` is ``nexus_selene``.
 
@@ -169,6 +175,8 @@ def run_dqi_with_details(
         parity_rhs=rhs_use,
         dicke_k=dicke_k,
         n_coverage=n_cov_use,
+        use_bp_decoder=use_bp_decoder,
+        bp_iterations=bp_iterations,
     )
 
     bitstring = res.stats_at_best.best_bitstring
