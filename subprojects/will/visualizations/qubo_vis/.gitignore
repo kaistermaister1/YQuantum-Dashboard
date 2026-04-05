@@ -1,3 +1,4 @@
 qubo_vis
 *.o
 .DS_Store
+.venv_export/
