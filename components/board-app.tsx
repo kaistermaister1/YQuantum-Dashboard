@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { Yqh26DataTab } from "@/components/yqh26-data-tab";
 import {
   BoardCard,
   DeckKey,
@@ -12,11 +13,14 @@ import {
   isDeckKey,
   sortCards
 } from "@/lib/board";
+import type { Yqh26DashboardData } from "@/lib/yqh26-data";
 
 type StorageMode = "local" | "remote";
+type ViewKey = "home" | "dataset";
 
 type BoardAppProps = {
   storageMode: StorageMode;
+  dataset: Yqh26DashboardData;
 };
 
 const DECK_SUBTEXT: Record<DeckKey, string> = {
@@ -106,11 +110,12 @@ function saveLocalCards(cards: BoardCard[]) {
   window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(sortCards(cards)));
 }
 
-export function BoardApp({ storageMode }: BoardAppProps) {
+export function BoardApp({ storageMode, dataset }: BoardAppProps) {
   const [cards, setCards] = useState<BoardCard[]>([]);
   const [cardModal, setCardModal] = useState<CardModalState | null>(null);
   const [dragState, setDragState] = useState<{ cardId: string; deck: DeckKey } | null>(null);
   const [activeDrop, setActiveDrop] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<ViewKey>("home");
 
   async function syncRemoteBoard() {
     const response = await fetch("/api/board", { cache: "no-store" });
@@ -317,127 +322,151 @@ export function BoardApp({ storageMode }: BoardAppProps) {
     <main className="page-shell">
       <div className="page-frame">
         <nav className="top-tabs" aria-label="Workspace sections">
-          <button type="button" className="top-tab top-tab-active" aria-current="page">
+          <button
+            type="button"
+            className={`top-tab ${activeView === "home" ? "top-tab-active" : ""}`}
+            aria-current={activeView === "home" ? "page" : undefined}
+            onClick={() => setActiveView("home")}
+          >
             Home
+          </button>
+          <button
+            type="button"
+            className={`top-tab ${activeView === "dataset" ? "top-tab-active" : ""}`}
+            aria-current={activeView === "dataset" ? "page" : undefined}
+            onClick={() => setActiveView("dataset")}
+          >
+            YQH26 Summary
           </button>
         </nav>
 
         <header className="page-header">
           <div className="page-header-copy">
-            <h1>YQuantum 2026</h1>
-            <p className="page-quote">"If I have seen further it is by standing on the shoulders of Giants." - Issac Newton</p>
+            <p className="page-kicker">{activeView === "home" ? "Q-gars Workspace" : "Travelers Challenge Summary"}</p>
+            <h1>YQuantum 2026 Dashboard</h1>
+            {activeView === "home" ? (
+              <p className="page-quote">
+                Track team work across the board, then switch tabs to inspect the full YQH26 insurance bundling instance.
+              </p>
+            ) : null}
           </div>
         </header>
 
-        <section className="boards-wrap">
-          <div className="boards-grid">
-            {DECKS.map((deck) => {
-              const deckCards = deckMap[deck.key];
+        {activeView === "home" ? (
+          <section className="boards-wrap">
+            <div className="boards-grid">
+              {DECKS.map((deck) => {
+                const deckCards = deckMap[deck.key];
 
-              return (
-                <section className="deck" data-color={deck.key} key={deck.key}>
-                  <header className="deck-head">
-                    <div>
-                      <h2 className="deck-title">{deck.label}</h2>
-                      <p className="deck-subtitle">
-                        <DeckGlyph deck={deck.key} />
-                        <span>{DECK_SUBTEXT[deck.key]}</span>
-                      </p>
-                    </div>
-                    <div className="count-badge">{deckCards.length}</div>
-                  </header>
-
-                  <div className="cards">
-                    <div
-                      className="drop-zone"
-                      data-active={activeDrop === `${deck.key}:0`}
-                      onDragOver={(event) => {
-                        event.preventDefault();
-                        setActiveDrop(`${deck.key}:0`);
-                      }}
-                      onDragLeave={() => setActiveDrop((current) => (current === `${deck.key}:0` ? null : current))}
-                      onDrop={(event) => {
-                        event.preventDefault();
-                        if (dragState) {
-                          void moveCard(dragState.cardId, deck.key, 0);
-                        }
-                        setDragState(null);
-                        setActiveDrop(null);
-                      }}
-                    />
-
-                    {deckCards.map((card, index) => (
-                      <div key={card.id}>
-                        <article
-                          className="card"
-                          data-dragging={dragState?.cardId === card.id}
-                          draggable
-                          onClick={() =>
-                            setCardModal({
-                              mode: "edit",
-                              deck: card.deck,
-                              id: card.id,
-                              title: card.title
-                            })
-                          }
-                          onDragStart={() => {
-                            setDragState({ cardId: card.id, deck: card.deck });
-                          }}
-                          onDragEnd={() => {
-                            setDragState(null);
-                            setActiveDrop(null);
-                          }}
-                        >
-                          <h3 className="card-title">{card.title}</h3>
-                        </article>
-
-                        <div
-                          className="drop-zone"
-                          data-active={activeDrop === `${deck.key}:${index + 1}`}
-                          onDragOver={(event) => {
-                            event.preventDefault();
-                            setActiveDrop(`${deck.key}:${index + 1}`);
-                          }}
-                          onDragLeave={() =>
-                            setActiveDrop((current) => (current === `${deck.key}:${index + 1}` ? null : current))
-                          }
-                          onDrop={(event) => {
-                            event.preventDefault();
-                            if (dragState) {
-                              void moveCard(dragState.cardId, deck.key, index + 1);
-                            }
-                            setDragState(null);
-                            setActiveDrop(null);
-                          }}
-                        />
+                return (
+                  <section className="deck" data-color={deck.key} key={deck.key}>
+                    <header className="deck-head">
+                      <div>
+                        <h2 className="deck-title">{deck.label}</h2>
+                        <p className="deck-subtitle">
+                          <DeckGlyph deck={deck.key} />
+                          <span>{DECK_SUBTEXT[deck.key]}</span>
+                        </p>
                       </div>
-                    ))}
-                  </div>
+                      <div className="count-badge">{deckCards.length}</div>
+                    </header>
 
-                  <button
-                    className="add-button"
-                    type="button"
-                    onClick={() =>
-                      setCardModal({
-                        mode: "create",
-                        deck: deck.key,
-                        title: ""
-                      })
-                    }
-                  >
-                    <span className="add-button-icon" aria-hidden="true">
-                      +
-                    </span>
-                    <span>Add card</span>
-                  </button>
-                </section>
-              );
-            })}
+                    <div className="cards">
+                      <div
+                        className="drop-zone"
+                        data-active={activeDrop === `${deck.key}:0`}
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                          setActiveDrop(`${deck.key}:0`);
+                        }}
+                        onDragLeave={() => setActiveDrop((current) => (current === `${deck.key}:0` ? null : current))}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          if (dragState) {
+                            void moveCard(dragState.cardId, deck.key, 0);
+                          }
+                          setDragState(null);
+                          setActiveDrop(null);
+                        }}
+                      />
+
+                      {deckCards.map((card, index) => (
+                        <div key={card.id}>
+                          <article
+                            className="card"
+                            data-dragging={dragState?.cardId === card.id}
+                            draggable
+                            onClick={() =>
+                              setCardModal({
+                                mode: "edit",
+                                deck: card.deck,
+                                id: card.id,
+                                title: card.title
+                              })
+                            }
+                            onDragStart={() => {
+                              setDragState({ cardId: card.id, deck: card.deck });
+                            }}
+                            onDragEnd={() => {
+                              setDragState(null);
+                              setActiveDrop(null);
+                            }}
+                          >
+                            <h3 className="card-title">{card.title}</h3>
+                          </article>
+
+                          <div
+                            className="drop-zone"
+                            data-active={activeDrop === `${deck.key}:${index + 1}`}
+                            onDragOver={(event) => {
+                              event.preventDefault();
+                              setActiveDrop(`${deck.key}:${index + 1}`);
+                            }}
+                            onDragLeave={() =>
+                              setActiveDrop((current) => (current === `${deck.key}:${index + 1}` ? null : current))
+                            }
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              if (dragState) {
+                                void moveCard(dragState.cardId, deck.key, index + 1);
+                              }
+                              setDragState(null);
+                              setActiveDrop(null);
+                            }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+
+                    <button
+                      className="add-button"
+                      type="button"
+                      onClick={() =>
+                        setCardModal({
+                          mode: "create",
+                          deck: deck.key,
+                          title: ""
+                        })
+                      }
+                    >
+                      <span className="add-button-icon" aria-hidden="true">
+                        +
+                      </span>
+                      <span>Add card</span>
+                    </button>
+                  </section>
+                );
+              })}
+            </div>
+          </section>
+        ) : (
+          <div className="dataset-wrap">
+            <Yqh26DataTab dataset={dataset} />
           </div>
-        </section>
+        )}
       </div>
 
-      {cardModal ? (
+      {activeView === "home" && cardModal ? (
         <div className="overlay" role="presentation" onClick={() => setCardModal(null)}>
           <div className="modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
             <h2>{cardModal.mode === "create" ? "Add card" : "Edit card"}</h2>

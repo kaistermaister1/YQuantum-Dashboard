@@ -1,5 +1,5 @@
 import Image from "next/image";
-import qgarsMark from "@/qgars.png";
+import qgarsMark from "@/public/brand/qgars.png";
 
 export function CollaborationStrip() {
   return (
