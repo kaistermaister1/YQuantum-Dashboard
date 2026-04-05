@@ -6,10 +6,13 @@ under ``Travelers/``. From ``Travelers/code_examples`` with PYTHONPATH including
 ``src``::
 
     cd Travelers/code_examples
+    # Full instance (20 coverages in YQH26_data): omit subsample flags (both default 0).
     PYTHONPATH=src ./.venv/bin/python ../../visualizations/qubo_vis/scripts/export_qubo_surface.py \\
-        --data-dir ../docs/data/YQH26_data \\
-        --package 0 --subsample-coverages 10 --subsample-packages 3 \\
+        --data-dir ../docs/data/YQH26_data --package 0 \\
         -o ../../visualizations/qubo_vis/qubo_surface.txt
+
+    # Smaller demo mesh only:
+    #   --subsample-coverages 10 --subsample-packages 3
 
 Or rely on defaults (resolves ``Travelers`` as a sibling of ``visualizations``
 under ``subprojects/will/``).
