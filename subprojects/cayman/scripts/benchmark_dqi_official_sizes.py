@@ -37,6 +37,9 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Default LTM CSV pack when the main repo includes Travelers challenge data (YQuantum-Dashboard layout).
+_BUNDLED_LTM_REL = ROOT.parent / "will" / "Travelers" / "docs" / "data" / "YQH26_data"
+
 from src.dqi_benchmarks import (
     benchmark_dqi_pipeline,
     brute_force_qubo,
@@ -102,8 +105,11 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument(
         "--data-dir",
         type=Path,
-        required=True,
-        help="Directory with LTM instance_*.csv files (see insurance_model.load_ltm_instance)",
+        default=None,
+        help=(
+            "Directory with LTM instance_*.csv files (see insurance_model.load_ltm_instance). "
+            f"If omitted and {_BUNDLED_LTM_REL} exists, that path is used."
+        ),
     )
     ap.add_argument("--package", type=int, default=0, help="Package index for QuboBlock")
     ap.add_argument(
@@ -279,7 +285,20 @@ def main() -> int:
         print("No instance sizes to run.", file=sys.stderr)
         return 1
 
-    data_dir = args.data_dir.resolve()
+    data_dir = args.data_dir
+    if data_dir is None:
+        if _BUNDLED_LTM_REL.is_dir() and (_BUNDLED_LTM_REL / "instance_coverages.csv").is_file():
+            data_dir = _BUNDLED_LTM_REL
+        else:
+            print(
+                "error: --data-dir is required (path to directory with LTM instance_*.csv files). "
+                f"No bundled data found at {_BUNDLED_LTM_REL}.",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        data_dir = Path(data_dir)
+    data_dir = data_dir.resolve()
     if not data_dir.is_dir():
         print(f"data dir not found: {data_dir}", file=sys.stderr)
         return 1
