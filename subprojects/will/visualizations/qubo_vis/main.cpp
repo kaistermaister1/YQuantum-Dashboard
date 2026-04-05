@@ -37,8 +37,89 @@ struct QuboSurface {
     std::vector<double> Q;
     std::vector<int> x;
 
+    /** If true, ``Q_ij = marginScale * qMarginDiag[i] (on diag) + lambdaLive * qPen``; const = lambdaLive * constPerLambda. */
+    bool parametricLambda = false;
+    double lambdaLive = 0.0;
+    double constPerLambda = 0.0;
+    std::vector<double> qMarginDiag;
+    std::vector<double> qPen;
+
     double qAt(int i, int j) const { return Q[static_cast<size_t>(i) * n + j]; }
 };
+
+static void ApplyLambdaToQ(QuboSurface& s, double marginScale) {
+    if (!s.parametricLambda || s.n <= 0) {
+        return;
+    }
+    const int n = s.n;
+    const double ms = std::max(1e-18, marginScale);
+    s.Q.resize(static_cast<size_t>(n) * n);
+    s.constantOffset = s.lambdaLive * s.constPerLambda;
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            const double margin = (i == j) ? s.qMarginDiag[static_cast<size_t>(i)] : 0.0;
+            s.Q[static_cast<size_t>(i) * n + j] =
+                margin * ms + s.lambdaLive * s.qPen[static_cast<size_t>(i) * n + j];
+        }
+    }
+}
+
+static constexpr float kLambdaSliderW = 400.f;
+static constexpr float kLambdaSliderH = 16.f;
+
+static float SliderTFromLogLambda(double lam, double logMin, double logMax) {
+    const double t = (std::log10(std::max(lam, 1e-30)) - logMin) / (logMax - logMin);
+    return static_cast<float>(std::max(0.0, std::min(1.0, t)));
+}
+
+static double LambdaFromSliderT(float t, double logMin, double logMax) {
+    t = std::max(0.f, std::min(1.f, t));
+    return std::pow(10.0, logMin + static_cast<double>(t) * (logMax - logMin));
+}
+
+static Rectangle ParamSliderHitRect(float x, float y) {
+    return {x - 8.f, y - 12.f, kLambdaSliderW + 16.f, kLambdaSliderH + 24.f};
+}
+
+/** QAOA accent #0066CC; track matches app shell grays. */
+static void DrawLambdaPenaltySlider(float x, float y, double lam, double logMin, double logMax) {
+    const Rectangle track = {x, y, kLambdaSliderW, kLambdaSliderH};
+    DrawRectangleRec(track, (Color){38, 44, 56, 245});
+    DrawRectangleLinesEx(track, 1.f, (Color){80, 140, 165, 220});
+    const float t = SliderTFromLogLambda(lam, logMin, logMax);
+    const float knobW = 11.f;
+    const float knobH = kLambdaSliderH + 10.f;
+    float knobX = x + t * kLambdaSliderW - knobW * 0.5f;
+    knobX = std::max(x, std::min(x + kLambdaSliderW - knobW, knobX));
+    const Rectangle knob = {knobX, y - 5.f, knobW, knobH};
+    DrawRectangleRounded(knob, 3.f, 8, (Color){0, 102, 204, 255});
+    DrawRectangleRoundedLines(knob, 3.f, 8, (Color){160, 220, 255, 255});
+}
+
+/** DQI blue #00356B for margin-scale knob. */
+static void DrawMarginScaleSlider(float x, float y, double s, double logMin, double logMax) {
+    const Rectangle track = {x, y, kLambdaSliderW, kLambdaSliderH};
+    DrawRectangleRec(track, (Color){38, 44, 56, 245});
+    DrawRectangleLinesEx(track, 1.f, (Color){70, 110, 150, 220});
+    const float t = SliderTFromLogLambda(s, logMin, logMax);
+    const float knobW = 11.f;
+    const float knobH = kLambdaSliderH + 10.f;
+    float knobX = x + t * kLambdaSliderW - knobW * 0.5f;
+    knobX = std::max(x, std::min(x + kLambdaSliderW - knobW, knobX));
+    const Rectangle knob = {knobX, y - 5.f, knobW, knobH};
+    DrawRectangleRounded(knob, 3.f, 8, (Color){0, 53, 107, 255});
+    DrawRectangleRoundedLines(knob, 3.f, 8, (Color){160, 200, 240, 255});
+}
+
+static bool ReadDoublesLine(const std::string& line, std::vector<double>* out) {
+    out->clear();
+    std::istringstream ls(line);
+    double v;
+    while (ls >> v) {
+        out->push_back(v);
+    }
+    return !out->empty();
+}
 
 static bool LoadQuboFile(const char* path, QuboSurface& out, std::string& err) {
     std::ifstream f(path);
@@ -46,14 +127,76 @@ static bool LoadQuboFile(const char* path, QuboSurface& out, std::string& err) {
         err = std::string("cannot open ") + path;
         return false;
     }
+    out.parametricLambda = false;
+    out.qMarginDiag.clear();
+    out.qPen.clear();
+    out.x.clear();
+
     std::string line;
+    std::vector<double> hdr;
     while (std::getline(f, line)) {
-        if (line.empty() || line[0] == '#') continue;
-        std::istringstream head(line);
-        if (!(head >> out.n >> out.nCoverage >> out.nSlack >> out.packageIndex >> out.constantOffset)) {
-            err = "bad header line";
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+        if (!ReadDoublesLine(line, &hdr)) {
+            continue;
+        }
+        if (hdr.size() < 5u) {
+            err = "bad header (need at least 5 numbers)";
             return false;
         }
+        out.n = static_cast<int>(hdr[0]);
+        out.nCoverage = static_cast<int>(hdr[1]);
+        out.nSlack = static_cast<int>(hdr[2]);
+        out.packageIndex = static_cast<int>(hdr[3]);
+        if (hdr.size() >= 6u) {
+            out.parametricLambda = true;
+            out.constPerLambda = hdr[4];
+            out.lambdaLive = hdr[5];
+        } else {
+            out.constantOffset = hdr[4];
+        }
+        break;
+    }
+    if (hdr.size() < 5u) {
+        err = "empty file or no header";
+        return false;
+    }
+    if (out.n < 1) {
+        err = "invalid n";
+        return false;
+    }
+
+    if (out.parametricLambda) {
+        if (!std::getline(f, line)) {
+            err = "v2: missing margin diagonal line";
+            return false;
+        }
+        std::vector<double> diag;
+        if (!ReadDoublesLine(line, &diag) || static_cast<int>(diag.size()) != out.n) {
+            err = "v2: bad margin diagonal (need n floats)";
+            return false;
+        }
+        out.qMarginDiag = std::move(diag);
+        out.qPen.resize(static_cast<size_t>(out.n) * out.n);
+        for (int i = 0; i < out.n; i++) {
+            if (!std::getline(f, line)) {
+                err = "v2: unexpected EOF reading Q_pen";
+                return false;
+            }
+            std::istringstream row(line);
+            for (int j = 0; j < out.n; j++) {
+                double v;
+                if (!(row >> v)) {
+                    err = "v2: bad Q_pen row " + std::to_string(i);
+                    return false;
+                }
+                out.qPen[static_cast<size_t>(i) * out.n + j] = v;
+            }
+        }
+        out.Q.resize(static_cast<size_t>(out.n) * out.n);
+        ApplyLambdaToQ(out, 1.0);
+    } else {
         out.Q.resize(static_cast<size_t>(out.n) * out.n);
         for (int i = 0; i < out.n; i++) {
             if (!std::getline(f, line)) {
@@ -70,44 +213,97 @@ static bool LoadQuboFile(const char* path, QuboSurface& out, std::string& err) {
                 out.Q[static_cast<size_t>(i) * out.n + j] = v;
             }
         }
-        int xPresent = 0;
-        if (!std::getline(f, line)) {
-            err = "missing x_present line";
+    }
+
+    int xPresent = 0;
+    if (!std::getline(f, line)) {
+        err = "missing x_present line";
+        return false;
+    }
+    {
+        std::istringstream xs(line);
+        if (!(xs >> xPresent)) {
+            err = "bad x_present";
             return false;
         }
-        {
-            std::istringstream xs(line);
-            if (!(xs >> xPresent)) {
-                err = "bad x_present";
-                return false;
-            }
-        }
-        if (xPresent) {
-            if (!std::getline(f, line)) {
-                err = "missing x vector";
-                return false;
-            }
-            std::istringstream xv(line);
-            out.x.resize(static_cast<size_t>(out.n));
-            for (int i = 0; i < out.n; i++) {
-                int b;
-                if (!(xv >> b)) {
-                    err = "short x vector";
-                    return false;
-                }
-                out.x[static_cast<size_t>(i)] = b ? 1 : 0;
-            }
-        }
-        return true;
     }
-    err = "empty file";
-    return false;
+    if (xPresent) {
+        if (!std::getline(f, line)) {
+            err = "missing x vector";
+            return false;
+        }
+        std::istringstream xv(line);
+        out.x.resize(static_cast<size_t>(out.n));
+        for (int i = 0; i < out.n; i++) {
+            int b;
+            if (!(xv >> b)) {
+                err = "short x vector";
+                return false;
+            }
+            out.x[static_cast<size_t>(i)] = b ? 1 : 0;
+        }
+    }
+    return true;
 }
 
 static double MaxAbsQ(const QuboSurface& s) {
     double m = 0.0;
     for (double v : s.Q) m = std::max(m, std::abs(v));
     return m;
+}
+
+static double MaxAbsQSubmatrix(const QuboSurface& s, int bi, int bj, int qn) {
+    double m = 0.0;
+    for (int i = 0; i < qn; i++) {
+        for (int j = 0; j < qn; j++) {
+            const int gi = bi + i;
+            const int gj = bj + j;
+            if (gi >= 0 && gi < s.n && gj >= 0 && gj < s.n) {
+                m = std::max(m, std::abs(s.qAt(gi, gj)));
+            }
+        }
+    }
+    return m;
+}
+
+/** One extracted square block from the loaded Q (for a smaller 3D demo mesh). */
+static constexpr int kQDemoBlockN = 13;
+
+static void ComputeDemoQBlock(const QuboSurface& surf, int* outBaseI, int* outBaseJ, int* outQn) {
+    const int cap = std::min(kQDemoBlockN, std::max(1, surf.n));
+    int qn = cap;
+    if (surf.n <= qn) {
+        *outBaseI = 0;
+        *outBaseJ = 0;
+        *outQn = surf.n;
+        return;
+    }
+    const int nTile = (surf.n + qn - 1) / qn;
+    const int selTI = nTile / 2;
+    const int selTJ = nTile / 2;
+    int bi = selTI * qn;
+    int bj = selTJ * qn;
+    bi = std::max(0, std::min(bi, surf.n - qn));
+    bj = std::max(0, std::min(bj, surf.n - qn));
+    *outBaseI = bi;
+    *outBaseJ = bj;
+    *outQn = qn;
+}
+
+static double EnergySubBlock(const QuboSurface& s, int bi, int bj, int qn) {
+    if (s.x.size() != static_cast<size_t>(s.n)) {
+        return 0.0;
+    }
+    double e = 0.0;
+    for (int i = 0; i < qn; i++) {
+        for (int j = 0; j < qn; j++) {
+            const int gi = bi + i;
+            const int gj = bj + j;
+            e += s.qAt(gi, gj) * static_cast<double>(s.x[static_cast<size_t>(gi)]) *
+                 static_cast<double>(s.x[static_cast<size_t>(gj)]);
+        }
+    }
+    return e;
 }
 
 static double Energy(const QuboSurface& s) {
@@ -133,6 +329,12 @@ struct GraphStyle {
     Color storyFloorLine{55, 62, 78, 255};   // faint ground grid during marbles intro
     /** Dependency arrows: ``01_insurance_bundling.html`` ``.constraint-badge.dependency`` / ``--family-optional-2`` */
     Color depArrow{0, 166, 118, 255};
+    /** Incompatibility links: ``.constraint-badge.incompatible`` / ``--family-optional-7`` (#c0392b) */
+    Color incompatLine{192, 57, 43, 255};
+    Color bundlerTray{88, 95, 110, 255};
+    Color bundlerTrayWire{140, 155, 175, 255};
+    Color checkAccent{45, 200, 120, 255};
+    Color bundleWrap{100, 170, 230, 90};
 };
 
 static GraphStyle g_style;
@@ -177,6 +379,24 @@ static int FamilyIndexForCoverage(int coverageIdx) {
         return 0;
     }
     return kFam[coverageIdx];
+}
+
+/**
+ * From ``instance_coverages.csv`` ``mandatory``: ``True`` = mandatory family (exactly one base choice);
+ * ``False`` = optional add-on. YQH26 explicit incompatible pairs are all optional↔optional; we skip drawing
+ * any pair involving a mandatory base bit so the viz matches “incompatibilities between add-ons.”
+ */
+static bool CoverageIsMandatoryFamilyPick(int coverageIdx) {
+    static const bool kMandatory[20] = {
+        true,  true,  true,  true,  true,   // 0-4  auto_base / property_base
+        false, false, false, false, false,  // 5-9
+        false, false, false, false, false,  // 10-14
+        false, false, false, false, false,  // 15-19
+    };
+    if (coverageIdx < 0 || coverageIdx >= 20) {
+        return true;
+    }
+    return kMandatory[coverageIdx];
 }
 
 static int CountSameFamilyBefore(int covIdx, int nCoverageMarbles) {
@@ -254,7 +474,7 @@ static void CoverageSpreadLandXZ(int covIdx, int n, int nCoverageMarbles, float 
     const int rank = CountSameFamilyBefore(covIdx, nCoverageMarbles);
     const float di = static_cast<float>((rank % 3) - 1);
     const float dj = static_cast<float>(((rank / 3) % 3) - 1);
-    const float sep = 1.58f * gx;
+    const float sep = 2.62f * gx;
     *outX = ox + static_cast<float>(hubI) * gx + di * sep;
     *outZ = oz + static_cast<float>(hubJ) * gz + dj * sep;
 }
@@ -317,6 +537,372 @@ static void DrawDependencyArrowBetweenMarbles(Vector3 centerFrom, Vector3 center
     DrawArrow3D(a, b, c);
 }
 
+/**
+ * Undirected pairs from ``Travelers/docs/data/YQH26_data/instance_incompatible_pairs.csv``
+ * (same rows ``insurance_model.py`` loads into ``compatibility_rules`` with ``compatible=False``).
+ * Bundling page example: gap_insurance ✗ personal_property_floater; all listed pairs are optional add-ons.
+ */
+struct CoverageIncompatiblePair {
+    int a;
+    int b;
+};
+
+static constexpr CoverageIncompatiblePair kCoverageIncompatiblePairs[] = {
+    {13, 14},  // gap_insurance, personal_property_floater
+    {15, 19},  // additional_living_expense, earthquake_insurance
+    {17, 18},  // excess_liability, flood_insurance
+};
+
+/** Red broken segment–gap–segment with an X in the gap (between marble surfaces). */
+static void DrawIncompatibleBrokenLineBetweenMarbles(Vector3 centerFrom, Vector3 centerTo, float marbleR, Color c) {
+    Vector3 d = Vector3Subtract(centerTo, centerFrom);
+    const float len = Vector3Length(d);
+    const float inset = marbleR * 1.08f;
+    if (len < 2.f * inset + 1e-4f) {
+        return;
+    }
+    Vector3 dir = Vector3Scale(d, 1.f / len);
+    const Vector3 a = Vector3Add(centerFrom, Vector3Scale(dir, inset));
+    const Vector3 b = Vector3Subtract(centerTo, Vector3Scale(dir, inset));
+    const Vector3 ab = Vector3Subtract(b, a);
+    const float L = Vector3Length(ab);
+    if (L < 1e-5f) {
+        return;
+    }
+    const Vector3 u = Vector3Scale(ab, 1.f / L);
+
+    float halfGap = std::max(marbleR * 0.55f, L * 0.11f);
+    halfGap = std::min(halfGap, L * 0.42f);
+
+    const float tMid = L * 0.5f;
+    const float tEnd1 = tMid - halfGap;
+    const float tStart2 = tMid + halfGap;
+
+    const Vector3 pGapA = Vector3Add(a, Vector3Scale(u, tEnd1));
+    const Vector3 pGapB = Vector3Add(a, Vector3Scale(u, tStart2));
+    DrawLine3D(a, pGapA, c);
+    DrawLine3D(pGapB, b, c);
+
+    const Vector3 mid = Vector3Add(a, Vector3Scale(u, tMid));
+
+    Vector3 up = {0.f, 1.f, 0.f};
+    if (std::fabs(Vector3DotProduct(u, up)) > 0.92f) {
+        up = {1.f, 0.f, 0.f};
+    }
+    Vector3 v = Vector3Normalize(Vector3CrossProduct(up, u));
+    Vector3 w = Vector3Normalize(Vector3CrossProduct(u, v));
+    const float xArm = std::min(halfGap * 0.65f, marbleR * 0.95f);
+    const float k = 0.70710678f * xArm;
+    const Vector3 vw = Vector3Add(v, w);
+    const Vector3 vmw = Vector3Subtract(v, w);
+    const float xOffset = std::min(halfGap * 0.38f, marbleR * 0.55f);
+    const Vector3 midL = Vector3Subtract(mid, Vector3Scale(u, xOffset));
+    const Vector3 midR = Vector3Add(mid, Vector3Scale(u, xOffset));
+    auto drawX = [&](Vector3 c0) {
+        DrawLine3D(Vector3Subtract(c0, Vector3Scale(vw, k)), Vector3Add(c0, Vector3Scale(vw, k)), c);
+        DrawLine3D(Vector3Subtract(c0, Vector3Scale(vmw, k)), Vector3Add(c0, Vector3Scale(vmw, k)), c);
+    };
+    drawX(midL);
+    drawX(midR);
+}
+
+// --- Bundler story (``01_insurance_bundling.html`` pkg "Suburban Homeowner": deps + incompat in play) ---
+enum class BundlerStoryPhase : int {
+    FadeScene = 0,
+    Checkmarks,
+    RiseStaging,
+    SuccessFlood,
+    FailFloaterDep,
+    FailExcessIncompat,
+    WrapBundle,
+    Done
+};
+
+/** ``PACKAGES[2]`` coverages: enhanced auto, homeowners, collision, UM, gap, umbrella, flood. */
+static constexpr int kDemoPkgCov[] = {1, 2, 5, 9, 13, 16, 18};
+static constexpr int kDemoStagingCov[] = {1, 2, 5, 9, 13, 16};  // package minus flood (star beat) */
+static constexpr int kDemoSuccessCov = 18;   // flood — requires homeowners (2), in package */
+static constexpr int kDemoSuccessReq = 2;
+static constexpr int kDemoFailDepCov = 14;   // floater — requires condo (3), not in this package */
+static constexpr int kDemoFailDepReq = 3;
+static constexpr int kDemoFailIncompatCov = 17;  // excess — needs enhanced (1) OK but ✗ flood (18) in bundle */
+static constexpr int kDemoIncompatPartner = 18;
+
+static bool DemoPackageContains(int covIdx) {
+    for (int c : kDemoPkgCov) {
+        if (c == covIdx) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool DemoIsStagingMarble(int covIdx) {
+    for (int c : kDemoStagingCov) {
+        if (c == covIdx) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void BundlerDecodePhase(float tSec, BundlerStoryPhase* outPh, float* outLocal) {
+    static const float kDur[] = {0.72f, 0.58f, 1.05f, 2.7f, 2.75f, 2.75f, 2.05f};
+    const int n = static_cast<int>(sizeof(kDur) / sizeof(kDur[0]));
+    float acc = 0.f;
+    for (int i = 0; i < n; i++) {
+        if (tSec < acc + kDur[i]) {
+            *outPh = static_cast<BundlerStoryPhase>(i);
+            *outLocal = (tSec - acc) / kDur[i];
+            return;
+        }
+        acc += kDur[i];
+    }
+    *outPh = BundlerStoryPhase::Done;
+    *outLocal = 1.f;
+}
+
+static Vector3 BundlerTrayCenter(float ox, float oz, float gx, float gz, int n, float landY, float amp) {
+    const float zn = static_cast<float>(std::max(0, n - 1));
+    return {ox + gx * 1.45f, landY + amp * 0.5f, oz + gz * zn * 0.9f};
+}
+
+static void BundlerBaseXZ(int covIdx, int n, int nMarbles, float ox, float oz, float gx, float gz, float* lx,
+                          float* lz) {
+    float cx = 0.f;
+    float cz = 0.f;
+    float sx = 0.f;
+    float sz = 0.f;
+    CoverageGroupLandXZ(covIdx, n, nMarbles, ox, oz, gx, gz, &cx, &cz);
+    CoverageSpreadLandXZ(covIdx, n, nMarbles, ox, oz, gx, gz, &sx, &sz);
+    const float spreadMulFinal = 1.68f;
+    *lx = cx + (sx - cx) * spreadMulFinal;
+    *lz = cz + (sz - cz) * spreadMulFinal;
+}
+
+static Vector3 StagingOffsetForSlot(int slot6, float radius, float riseY) {
+    const float a = static_cast<float>(slot6) * (6.2831853f / 6.f) + 0.35f;
+    return {std::cos(a) * radius, riseY, std::sin(a) * radius};
+}
+
+static int StagingSlotForCov(int covIdx) {
+    for (int s = 0; s < 6; s++) {
+        if (kDemoStagingCov[s] == covIdx) {
+            return s;
+        }
+    }
+    return 0;
+}
+
+static void DrawCheckmark3D(Vector3 tip, float s, Color col) {
+    const Vector3 p0 = {tip.x - s * 0.42f, tip.y, tip.z - s * 0.18f};
+    const Vector3 p1 = {tip.x - s * 0.08f, tip.y, tip.z + s * 0.32f};
+    const Vector3 p2 = {tip.x + s * 0.52f, tip.y, tip.z - s * 0.42f};
+    DrawLine3D(p0, p1, col);
+    DrawLine3D(p1, p2, col);
+}
+
+static void DrawMiniRedX3D(Vector3 c, float arm, Color col) {
+    const float k = 0.70710678f * arm;
+    DrawLine3D({c.x - k, c.y, c.z - k}, {c.x + k, c.y, c.z + k}, col);
+    DrawLine3D({c.x - k, c.y, c.z + k}, {c.x + k, c.y, c.z - k}, col);
+}
+
+static float BundlerFlashTwice(float u) {
+    if (u < 0.18f) {
+        return 1.f;
+    }
+    if (u < 0.36f) {
+        return 0.1f;
+    }
+    if (u < 0.54f) {
+        return 1.f;
+    }
+    if (u < 0.72f) {
+        return 0.1f;
+    }
+    return 0.12f;
+}
+
+/** ILP objective split (``02_ilp_to_qubo.html``): $M_{i,m}=\\text{price}\\cdot\\text{margin}\\cdot(1-\\delta_m)$,
+ *  $C_{i,m}$ full contribution including take rate, $\\alpha_{i,m}$, and $(1+\\beta\\delta_m)$.
+ *  Values for **package index 2** (Suburban Homeowner, $\\delta=0.15$, $\\beta=1.2$) and AFFINITIES[2] from bundling page. */
+static constexpr float kMcRowM[7] = {
+    280.84f, 308.12f, 97.92f, 44.63f, 79.73f, 96.9f, 145.35f,
+};
+static constexpr float kMcRowC[7] = {
+    178.95f, 307.24f, 71.64f, 25.28f, 18.07f, 28.59f, 25.22f,
+};
+
+/** Demo package coverage rows × duplicated columns (ILP M, C are full matrices; narrative uses row-constant tiles). */
+static constexpr int kMcMatrixDim = 7;
+
+enum class McStoryPhase : int {
+    FadeNonPackage = 0,
+    ShowMatrices,
+    UnbundleWrap,
+    GatherCenter,
+    SplitHalves,
+    AssignColumns,
+    Done
+};
+
+static constexpr float kMcPhaseDur[6] = {0.52f, 0.7f, 0.58f, 1.05f, 0.72f, 1.38f};
+
+static float McPhaseStartTime(McStoryPhase ph) {
+    float acc = 0.f;
+    for (int i = 0; i < static_cast<int>(ph); i++) {
+        acc += kMcPhaseDur[i];
+    }
+    return acc;
+}
+
+static void McDecodePhase(float tSec, McStoryPhase* outPh, float* outLocal) {
+    const int n = static_cast<int>(sizeof(kMcPhaseDur) / sizeof(kMcPhaseDur[0]));
+    float acc = 0.f;
+    for (int i = 0; i < n; i++) {
+        if (tSec < acc + kMcPhaseDur[i]) {
+            *outPh = static_cast<McStoryPhase>(i);
+            *outLocal = (tSec - acc) / kMcPhaseDur[i];
+            return;
+        }
+        acc += kMcPhaseDur[i];
+    }
+    *outPh = McStoryPhase::Done;
+    *outLocal = 1.f;
+}
+
+static int DemoPkgRowIndex(int covIdx) {
+    for (int i = 0; i < 7; i++) {
+        if (kDemoPkgCov[i] == covIdx) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+static void McMatrixGrids(float landY, float gx, float gz, float oz, int nGrid, float* outColStep, float* outRowStep,
+                          Vector3 mOut[kMcMatrixDim][kMcMatrixDim], Vector3 cOut[kMcMatrixDim][kMcMatrixDim]) {
+    const float colStep = gx * 0.44f;
+    const float rowStep = gx * 1.02f;
+    *outColStep = colStep;
+    *outRowStep = rowStep;
+    const float xCenterM = -gx * 3.35f;
+    const float xCenterC = gx * 3.35f;
+    const float zMid = oz + gz * static_cast<float>(std::max(0, nGrid - 1)) * 0.5f;
+    for (int r = 0; r < kMcMatrixDim; r++) {
+        const float z = zMid + rowStep * (3.f - static_cast<float>(r));
+        for (int c = 0; c < kMcMatrixDim; c++) {
+            const float xM = xCenterM + (static_cast<float>(c) - 3.f) * colStep;
+            const float xC = xCenterC + (static_cast<float>(c) - 3.f) * colStep;
+            mOut[r][c] = {xM, landY + 0.055f * gx, z};
+            cOut[r][c] = {xC, landY + 0.055f * gx, z};
+        }
+    }
+}
+
+static void DrawMcMatrixPads(const Vector3 mGrid[kMcMatrixDim][kMcMatrixDim],
+                             const Vector3 cGrid[kMcMatrixDim][kMcMatrixDim], float cellX, float cellZ,
+                             const float* heatM, const float* heatC, const Color& coldC, const Color& hotC, float alpha) {
+    auto heatTint = [](float v, float vmax, Color cold, Color hot, float a) -> Color {
+        const float t = std::max(0.f, std::min(1.f, v / std::max(vmax, 1e-6f)));
+        Color o = {
+            static_cast<unsigned char>(std::round(static_cast<float>(cold.r) +
+                                                 t * (static_cast<float>(hot.r) - static_cast<float>(cold.r)))),
+            static_cast<unsigned char>(std::round(static_cast<float>(cold.g) +
+                                                 t * (static_cast<float>(hot.g) - static_cast<float>(cold.g)))),
+            static_cast<unsigned char>(std::round(static_cast<float>(cold.b) +
+                                                 t * (static_cast<float>(hot.b) - static_cast<float>(cold.b)))),
+            static_cast<unsigned char>(std::round(255.f * a))};
+        return o;
+    };
+    float maxM = heatM[0];
+    float maxC = heatC[0];
+    for (int i = 1; i < kMcMatrixDim; i++) {
+        maxM = std::max(maxM, heatM[i]);
+        maxC = std::max(maxC, heatC[i]);
+    }
+    const Color coldM = {15, 40, 85, 255};
+    const Color hotM = {0, 102, 204, 255};
+    const float thickY = 0.035f * std::min(cellX, cellZ);
+    const float hx = cellX * 0.44f;
+    const float hz = cellZ * 0.44f;
+    for (int r = 0; r < kMcMatrixDim; r++) {
+        Color fm = heatTint(heatM[r], maxM, coldM, hotM, alpha * 0.55f);
+        Color fc = heatTint(heatC[r], maxC, coldC, hotC, alpha * 0.55f);
+        for (int c = 0; c < kMcMatrixDim; c++) {
+            DrawCube(mGrid[r][c], hx * 2.f, thickY, hz * 2.f, fm);
+            DrawCubeWires(mGrid[r][c], hx * 2.f, thickY, hz * 2.f,
+                          {200, 210, 225, static_cast<unsigned char>(std::round(200.f * alpha))});
+            DrawCube(cGrid[r][c], hx * 2.f, thickY, hz * 2.f, fc);
+            DrawCubeWires(cGrid[r][c], hx * 2.f, thickY, hz * 2.f,
+                          {200, 210, 225, static_cast<unsigned char>(std::round(180.f * alpha))});
+        }
+    }
+}
+
+static void DrawMcMatrixFrames(const Vector3 grid[kMcMatrixDim][kMcMatrixDim], float cellX, float cellZ, Color lineCol,
+                               float alpha) {
+    lineCol.a = static_cast<unsigned char>(std::round(static_cast<float>(lineCol.a) * alpha));
+    const float hx = cellX * 0.48f;
+    const float hz = cellZ * 0.48f;
+    for (int r = 0; r < kMcMatrixDim; r++) {
+        for (int c = 0; c < kMcMatrixDim; c++) {
+            const Vector3 p = grid[r][c];
+            const float x0 = p.x - hx;
+            const float x1 = p.x + hx;
+            const float z0 = p.z - hz;
+            const float z1 = p.z + hz;
+            const float y = p.y;
+            DrawLine3D({x0, y, z0}, {x1, y, z0}, lineCol);
+            DrawLine3D({x1, y, z0}, {x1, y, z1}, lineCol);
+            DrawLine3D({x1, y, z1}, {x0, y, z1}, lineCol);
+            DrawLine3D({x0, y, z1}, {x0, y, z0}, lineCol);
+        }
+    }
+}
+
+static void DrawMcMatrixCellBalls(const Vector3 grid[kMcMatrixDim][kMcMatrixDim], float cellX, float cellZ,
+                                  const float* heatRow, const Color& coldTint, const Color& hotTint, Color wireCol,
+                                  float gx, float alpha) {
+    float vmax = heatRow[0];
+    for (int i = 1; i < kMcMatrixDim; i++) {
+        vmax = std::max(vmax, heatRow[i]);
+    }
+    auto tint = [&](float v) -> Color {
+        const float t = std::max(0.f, std::min(1.f, v / std::max(vmax, 1e-6f)));
+        Color o = {
+            static_cast<unsigned char>(std::round(static_cast<float>(coldTint.r) +
+                                                 t * (static_cast<float>(hotTint.r) - static_cast<float>(coldTint.r)))),
+            static_cast<unsigned char>(std::round(static_cast<float>(coldTint.g) +
+                                                 t * (static_cast<float>(hotTint.g) - static_cast<float>(coldTint.g)))),
+            static_cast<unsigned char>(std::round(static_cast<float>(coldTint.b) +
+                                                 t * (static_cast<float>(hotTint.b) - static_cast<float>(coldTint.b)))),
+            static_cast<unsigned char>(std::round(255.f * alpha * 0.92f))};
+        return o;
+    };
+    const float rad = std::min(cellX, cellZ) * 0.11f;
+    const float lift = gx * 0.09f;
+    wireCol.a = static_cast<unsigned char>(std::round(static_cast<float>(wireCol.a) * alpha));
+    for (int r = 0; r < kMcMatrixDim; r++) {
+        Color rowCol = tint(heatRow[r]);
+        for (int c = 0; c < kMcMatrixDim; c++) {
+            Vector3 p = grid[r][c];
+            p.y += lift;
+            DrawSphere(p, rad * 0.92f, rowCol);
+            DrawSphereWires(p, rad, 7, 10, wireCol);
+        }
+    }
+}
+
+static Vector3 McNonPackagePlanePos(int covIdx, int nMarbles, int nGrid, float ox, float oz, float gx, float gz,
+                                    float landY) {
+    float lx = 0.f;
+    float lz = 0.f;
+    BundlerBaseXZ(covIdx, nGrid, nMarbles, ox, oz, gx, gz, &lx, &lz);
+    return {lx, landY, lz};
+}
+
 static float SmoothStep(float t) {
     if (t <= 0.f) {
         return 0.f;
@@ -325,6 +911,35 @@ static float SmoothStep(float t) {
         return 1.f;
     }
     return t * t * (3.f - 2.f * t);
+}
+
+static Vector3 McMatrixGridCenter(const Vector3 grid[kMcMatrixDim][kMcMatrixDim]) {
+    float sx = 0.f;
+    float sz = 0.f;
+    for (int r = 0; r < kMcMatrixDim; r++) {
+        for (int c = 0; c < kMcMatrixDim; c++) {
+            sx += grid[r][c].x;
+            sz += grid[r][c].z;
+        }
+    }
+    const float inv = 1.f / static_cast<float>(kMcMatrixDim * kMcMatrixDim);
+    const float y = grid[0][0].y;
+    return {sx * inv, y, sz * inv};
+}
+
+/** Large "M" / "C" HUD: slower double-flash when matrices appear, then stay fully lit until the story advances (→). */
+static constexpr float kMcMatrixLabelFlashSec = 1.05f;
+
+static float McMatrixLabelAlpha(float mcElapsedSec) {
+    const float t0 = McPhaseStartTime(McStoryPhase::ShowMatrices);
+    if (mcElapsedSec < t0) {
+        return 0.f;
+    }
+    const float u = mcElapsedSec - t0;
+    if (u < kMcMatrixLabelFlashSec) {
+        return BundlerFlashTwice(std::min(1.f, u / kMcMatrixLabelFlashSec));
+    }
+    return 1.f;
 }
 
 static float EaseInOutCubic(float t) {
@@ -353,6 +968,238 @@ static Color LerpColorRgb(const Color& a, const Color& b, float t) {
             std::round(static_cast<float>(u) + t * (static_cast<float>(v) - static_cast<float>(u))));
     };
     return {l(a.r, b.r), l(a.g, b.g), l(a.b, b.b), 255};
+}
+
+enum class McMergeStoryPhase : int {
+    FadeOverlays = 0,
+    LiftCSeven,
+    ExpandFullStack,
+    MergeTeal,
+    Done
+};
+
+static constexpr float kMcMergePhaseDur[4] = {0.55f, 0.72f, 1.9f, 1.5f};
+
+static void McMergeDecodePhase(float tSec, McMergeStoryPhase* outPh, float* outLocal) {
+    float acc = 0.f;
+    for (int i = 0; i < 4; i++) {
+        if (tSec < acc + kMcMergePhaseDur[i]) {
+            *outPh = static_cast<McMergeStoryPhase>(i);
+            *outLocal = (tSec - acc) / kMcMergePhaseDur[i];
+            return;
+        }
+        acc += kMcMergePhaseDur[i];
+    }
+    *outPh = McMergeStoryPhase::Done;
+    *outLocal = 1.f;
+}
+
+/** Fake block-diagonal shading: off-block regions (between diagonal Q blocks) read darker — illustrative zeros. */
+static Color QBlockDiagonalTealCell(Color baseFill, const Color& baseWire, int row, int col, int blockSide,
+                                    Color* outWire) {
+    if (blockSide <= 0) {
+        *outWire = baseWire;
+        return baseFill;
+    }
+    const int br = row / blockSide;
+    const int bc = col / blockSide;
+    if (br == bc) {
+        *outWire = baseWire;
+        return baseFill;
+    }
+    const Color dimFill = {0, 36, 46, 255};
+    Color fc = LerpColorRgb(baseFill, dimFill, 0.76f);
+    fc.a = baseFill.a;
+    const Color dimWire = {25, 65, 72, baseWire.a};
+    *outWire = LerpColorRgb(baseWire, dimWire, 0.62f);
+    outWire->a = baseWire.a;
+    return fc;
+}
+
+/** Procedural N×M tiles (coverage × package) for the full objective-coefficient view. */
+static void DrawInsuranceCoefficientMatrix(int nRows, int nCols, float cx, float cz, float yPlane, float colW,
+                                           float rowW, float thickY, const Color& cold, const Color& hot, Color wireCol,
+                                           float alpha, int blockDiagSide) {
+    wireCol.a = static_cast<unsigned char>(
+        std::round(static_cast<float>(wireCol.a) * std::max(0.f, std::min(1.f, alpha))));
+    for (int r = 0; r < nRows; r++) {
+        for (int c = 0; c < nCols; c++) {
+            const float shade = 0.32f + 0.68f * (0.5f + 0.5f * sinf(r * 0.21f + c * 0.13f));
+            Color fc = LerpColorRgb(cold, hot, shade);
+            fc.a = static_cast<unsigned char>(std::round(255.f * std::max(0.f, std::min(1.f, alpha)) * 0.52f));
+            Color wcell = wireCol;
+            fc = QBlockDiagonalTealCell(fc, wireCol, r, c, blockDiagSide, &wcell);
+            const float x = cx - static_cast<float>(nCols - 1) * 0.5f * colW + static_cast<float>(c) * colW;
+            const float z = cz + static_cast<float>(nRows - 1) * 0.5f * rowW - static_cast<float>(r) * rowW;
+            const Vector3 p = {x, yPlane, z};
+            DrawCube(p, colW * 0.9f, thickY, rowW * 0.9f, fc);
+            DrawCubeWires(p, colW * 0.9f, thickY, rowW * 0.9f, wcell);
+        }
+    }
+}
+
+static void McCopyGridLiftC(const Vector3 src[kMcMatrixDim][kMcMatrixDim], float dy,
+                            Vector3 dst[kMcMatrixDim][kMcMatrixDim]) {
+    for (int r = 0; r < kMcMatrixDim; r++) {
+        for (int c = 0; c < kMcMatrixDim; c++) {
+            dst[r][c] = src[r][c];
+            dst[r][c].y += dy;
+        }
+    }
+}
+
+enum class QSliceStoryPhase : int {
+    ShowGrid = 0,
+    HighlightSel,
+    FadeOthers,
+    ExpandMergeMesh,
+    Fade2D,
+    Done
+};
+
+static constexpr float kQSlicePhaseDur[5] = {0.5f, 0.55f, 0.75f, 1.55f, 0.65f};
+
+static void QSliceDecodePhase(float tSec, QSliceStoryPhase* outPh, float* outLocal) {
+    float acc = 0.f;
+    for (int i = 0; i < 5; i++) {
+        if (tSec < acc + kQSlicePhaseDur[i]) {
+            *outPh = static_cast<QSliceStoryPhase>(i);
+            *outLocal = (tSec - acc) / kQSlicePhaseDur[i];
+            return;
+        }
+        acc += kQSlicePhaseDur[i];
+    }
+    *outPh = QSliceStoryPhase::Done;
+    *outLocal = 1.f;
+}
+
+/** Full n×n teal Q plane with tile masking, optional morph of the selected qMeshN×qMeshN block toward mesh XZ layout. */
+static void DrawTealQMatrixDynamic(int n, float cx, float cz, float yPlane, float colW, float rowW, float thickY,
+                                   const Color& cold, const Color& hot, Color wireCol, float baseAlpha, int tileSide,
+                                   int selTI, int selTJ, float alphaOther, float alphaSelected, float highlightBoost,
+                                   int blockBaseI, int blockBaseJ, int qMeshN, float morphU, float oxMesh, float ozMesh,
+                                   float meshStepX, float meshStepZ) {
+    const int ts = std::max(1, std::min(tileSide, n));
+    wireCol.a = static_cast<unsigned char>(
+        std::round(static_cast<float>(wireCol.a) * std::max(0.f, std::min(1.f, baseAlpha))));
+    for (int r = 0; r < n; r++) {
+        for (int c = 0; c < n; c++) {
+            const int ti = r / ts;
+            const int tj = c / ts;
+            const bool inSel =
+                (r >= blockBaseI && r < blockBaseI + qMeshN && c >= blockBaseJ && c < blockBaseJ + qMeshN);
+            const bool isSelTile = (ti == selTI && tj == selTJ);
+            float cellA = baseAlpha * (isSelTile ? alphaSelected : alphaOther);
+            if (isSelTile && highlightBoost > 0.f) {
+                cellA = std::min(1.f, cellA * (1.f + highlightBoost));
+            }
+            if (cellA < 0.004f) {
+                continue;
+            }
+            Vector3 p0 = {cx - static_cast<float>(n - 1) * 0.5f * colW + static_cast<float>(c) * colW, yPlane,
+                          cz + static_cast<float>(n - 1) * 0.5f * rowW - static_cast<float>(r) * rowW};
+            Vector3 p = p0;
+            float cw = colW * 0.9f;
+            float rw = rowW * 0.9f;
+            if (inSel && morphU > 0.001f) {
+                const int li = r - blockBaseI;
+                const int lj = c - blockBaseJ;
+                const Vector3 p1 = {oxMesh + static_cast<float>(li) * meshStepX, yPlane,
+                                    ozMesh + static_cast<float>(lj) * meshStepZ};
+                const float e = EaseInOutCubic(std::max(0.f, std::min(1.f, morphU)));
+                p = Vector3Lerp(p0, p1, e);
+                // Match DrawQBlockMesh3D: morphed tiles use passed meshStepX/Z (full-plane span / (qMeshN-1)).
+                cw = colW * 0.9f + (meshStepX - colW * 0.9f) * e;
+                rw = rowW * 0.9f + (meshStepZ - rowW * 0.9f) * e;
+            }
+            const float shade = 0.32f + 0.68f * (0.5f + 0.5f * sinf(r * 0.11f + c * 0.09f));
+            Color fc = LerpColorRgb(cold, hot, shade);
+            fc.a = static_cast<unsigned char>(std::round(255.f * cellA * 0.52f));
+            const int bdSide = std::max(1, std::min(qMeshN, n));
+            Color wcell;
+            fc = QBlockDiagonalTealCell(fc, wireCol, r, c, bdSide, &wcell);
+            wcell.a = static_cast<unsigned char>(std::round(static_cast<float>(wcell.a) * cellA));
+            const float th = thickY * (0.85f + 0.15f * (inSel ? EaseInOutCubic(std::max(0.f, std::min(1.f, morphU))) : 0.f));
+            DrawCube(p, cw, th, rw, fc);
+            DrawCubeWires(p, cw, th, rw, wcell);
+        }
+    }
+}
+
+static void DrawQBlockSliceLines(int n, float cx, float cz, float yPlane, float colW, float rowW, int tileSide,
+                               Color lineCol, float alpha) {
+    const int ts = std::max(1, std::min(tileSide, n));
+    lineCol.a = static_cast<unsigned char>(
+        std::round(static_cast<float>(lineCol.a) * std::max(0.f, std::min(1.f, alpha))));
+    const float x0 = cx - static_cast<float>(n - 1) * 0.5f * colW;
+    const float z0 = cz + static_cast<float>(n - 1) * 0.5f * rowW;
+    const float x1 = x0 + static_cast<float>(n - 1) * colW;
+    const float z1 = z0 - static_cast<float>(n - 1) * rowW;
+    for (int k = ts; k < n; k += ts) {
+        const float x = x0 + static_cast<float>(k) * colW;
+        DrawLine3D({x, yPlane, z0}, {x, yPlane, z1}, lineCol);
+        const float z = z0 - static_cast<float>(k) * rowW;
+        DrawLine3D({x0, yPlane, z}, {x1, yPlane, z}, lineCol);
+    }
+}
+
+static void DrawQBlockMesh3D(const QuboSurface& surf, int bi, int bj, int qn, float oxB, float ozB, float gx, float gz,
+                             double scaleDen, float ampVis, float meshAlpha, float diagAlpha, float assignAlpha,
+                             float valueExtrude = 1.f) {
+    if (qn <= 0) {
+        return;
+    }
+    const float ve = std::max(0.f, std::min(1.f, valueExtrude));
+    Color meshLine = g_style.meshLine;
+    meshLine.a = static_cast<unsigned char>(std::round(static_cast<float>(meshLine.a) * meshAlpha));
+    Color diagLine = g_style.diagonalLine;
+    diagLine.a = static_cast<unsigned char>(std::round(static_cast<float>(diagLine.a) * diagAlpha));
+    Color assignLine = g_style.assignmentLine;
+    assignLine.a = static_cast<unsigned char>(std::round(static_cast<float>(assignLine.a) * assignAlpha));
+
+    for (int i = 0; i < qn; i++) {
+        for (int j = 0; j < qn; j++) {
+            const int gi = bi + i;
+            const int gj = bj + j;
+            double qij = surf.qAt(gi, gj);
+            float y = static_cast<float>(qij / scaleDen) * ampVis * ve;
+            Vector3 p = {oxB + static_cast<float>(i) * gx, y, ozB + static_cast<float>(j) * gz};
+            if (i + 1 < qn) {
+                double qnxt = surf.qAt(bi + i + 1, gj);
+                float yn = static_cast<float>(qnxt / scaleDen) * ampVis * ve;
+                DrawLine3D(p, {oxB + static_cast<float>(i + 1) * gx, yn, ozB + static_cast<float>(j) * gz}, meshLine);
+            }
+            if (j + 1 < qn) {
+                double qnxt = surf.qAt(gi, bj + j + 1);
+                float yn = static_cast<float>(qnxt / scaleDen) * ampVis * ve;
+                DrawLine3D(p, {oxB + static_cast<float>(i) * gx, yn, ozB + static_cast<float>(j + 1) * gz}, meshLine);
+            }
+            if (gi == gj && ve > 0.004f) {
+                DrawLine3D({p.x, 0.f, p.z}, p, diagLine);
+            }
+        }
+    }
+
+    if (!surf.x.empty() && ve > 0.02f) {
+        for (int i = 0; i < qn; i++) {
+            for (int j = 0; j < qn; j++) {
+                const int gi = bi + i;
+                const int gj = bj + j;
+                if (gi != gj || gi < 0 || gi >= surf.n) {
+                    continue;
+                }
+                if (!surf.x[static_cast<size_t>(gi)]) {
+                    continue;
+                }
+                double qii = surf.qAt(gi, gj);
+                float y = static_cast<float>(qii / scaleDen) * ampVis * ve;
+                Vector3 p = {oxB + static_cast<float>(i) * gx, y, ozB + static_cast<float>(j) * gz};
+                float top = p.y + 0.35f * ampVis * ve;
+                DrawLine3D(p, {p.x, top, p.z}, assignLine);
+                DrawSphere({p.x, top, p.z}, 0.08f * ampVis * ve, assignLine);
+            }
+        }
+    }
 }
 
 static Color QHeatColor(double v, double maxAbs) {
@@ -496,7 +1343,9 @@ static void DrawQMatrixPanel(const QuboSurface& surf, const QMatrixLayout& L, do
     }
 }
 
-static void DrawLegendPanel(int sw, int sh, const QuboSurface& surf, bool showAssignmentKey) {
+static void DrawLegendPanel(int sw, int sh, const QuboSurface& surf, bool showAssignmentKey,
+                            bool showParametricParams, double lambdaLive, double marginScaleS,
+                            bool marginScaleEnabled) {
     const int pw = 432;
     const int px = sw - pw - 12;
     const int py = 72;
@@ -527,6 +1376,37 @@ static void DrawLegendPanel(int sw, int sh, const QuboSurface& surf, bool showAs
     y += lh;
     DrawText("Binary bits x_i in {0,1} (coverages + slacks).", px, y, fs, body);
     y += lh + 8;
+
+    if (showParametricParams) {
+        DrawText("Interactive Q (v2 surface file)", px, y, fs + 2, title);
+        y += lh + 4;
+        DrawText("These sliders rebuild Q from exported pieces; penalties stay consistent.", px, y, fs, body);
+        y += lh + 6;
+        char lamL[280];
+        std::snprintf(lamL, sizeof(lamL),
+                      "  lambda (penalty weight):  %.6g   — scales ALL constraint squares the same.", lambdaLive);
+        DrawText(lamL, px, y, fs, accent);
+        y += lh;
+        DrawText("  Too small: feasible assignments can lose to high-margin violations.", px, y, fs, body);
+        y += lh;
+        DrawText("  Too large: landscape dominated by feasibility; margins harder to read.", px, y, fs, body);
+        y += lh;
+        DrawText("  Drag the cyan/blue bottom slider (log scale).", px, y, fs, body);
+        y += lh + 6;
+        char sL[320];
+        std::snprintf(sL, sizeof(sL),
+                      "  s (margin scale):  %s   value %.6g",
+                      marginScaleEnabled ? "ON " : "OFF (press M to enable)",
+                      marginScaleEnabled ? marginScaleS : 1.0);
+        DrawText(sL, px, y, fs, (Color){100, 170, 230, 255});
+        y += lh;
+        DrawText("  Scales only the profit/margin diagonal (coverage coefficients), not penalties.", px, y, fs, body);
+        y += lh;
+        DrawText("  Use it to see relative strength of margin vs lambda-weighted constraints.", px, y, fs, body);
+        y += lh;
+        DrawText("  When ON, drag the Yale-blue slider above lambda (log scale).", px, y, fs, body);
+        y += lh + 8;
+    }
 
     DrawText("The height field (gray mesh)", px, y, fs + 2, title);
     y += lh + 4;
@@ -642,15 +1522,21 @@ static void StepTrackball(Camera3D& camera) {
 enum class StoryStep : int {
     MarblesDropWhite = 0,   // coverages fall as neutral (white) marbles
     MarblesFamilyColor = 1,  // blend to family colors, pause, then slide to family clusters (→ from step 0)
-    MarblesDependencies = 2,  // spread for clarity + arrows from instance_dependencies.csv (→ from step 1)
-    QBlockField = 3,
-    Count = 4,
+    MarblesDependencies = 2,  // spread + dependency arrows (instance_dependencies.csv)
+    MarblesIncompatibilities = 3,  // same layout + broken red incompatibility links (instance_incompatible_pairs.csv)
+    MarblesBundler = 4,  // bundler tray demo (Suburban Homeowner package)
+    MarblesMcDecompose = 5,  // M vs C column split (ILP objective factors, pkg 2)
+    MarblesMcMerge = 6,      // full n×n Q (coverages + slacks) → stack → single teal matrix
+    QSliceToBlock = 7,       // slice n×n → pick block → morph into smaller Q mesh
+    QBlockField = 8,
+    Count = 9,
 };
 
 static constexpr float kFamilyColorBlendSec = 0.85f;
 static constexpr float kFamilyPauseAfterColorSec = 0.5f;
 static constexpr float kFamilyGroupMoveSec = 1.15f;
 static constexpr float kDepSpreadSec = 0.95f;
+static constexpr float kIncompatDrawSec = 0.9f;
 
 static float EaseOutCubic(float t) {
     if (t <= 0.f) return 0.f;
@@ -659,16 +1545,223 @@ static float EaseOutCubic(float t) {
     return 1.f - u * u * u;
 }
 
-static void DrawStoryFloorGrid(float ox, float oz, float gx, float gz, int n, const Color& col) {
+static Vector3 BundlerStagingWorld(int covIdx, const Vector3& tray, float gx, float amp) {
+    const Vector3 off = StagingOffsetForSlot(StagingSlotForCov(covIdx), gx * 2.55f, amp * 0.4f);
+    return {tray.x + off.x, tray.y + off.y, tray.z + off.z};
+}
+
+static Vector3 BundlerPackageCluster(int covIdx, const Vector3& tray, float gx, float gz, float marbleR) {
+    int ord = 0;
+    bool found = false;
+    for (int c : kDemoPkgCov) {
+        if (c == covIdx) {
+            found = true;
+            break;
+        }
+        ord++;
+    }
+    if (!found) {
+        return tray;
+    }
+    const float step = 6.2831853f / 8.f;
+    const float a = static_cast<float>(ord) * step + 0.2f;
+    const float rad = gx * 0.44f;
+    return {tray.x + std::cos(a) * rad, tray.y + marbleR * 1.1f,
+            tray.z + std::sin(a) * rad * (gz / std::max(gx, 0.001f))};
+}
+
+static void ComputeMcPackageMarble(int covIdx, int nMarbles, int nGrid, float /*ox*/, float oz, float gx, float gz,
+                                   float landY, float amp, float marbleR, McStoryPhase ph, float u, const Vector3& tray,
+                                   const Vector3 mGrid[kMcMatrixDim][kMcMatrixDim],
+                                   const Vector3 cGrid[kMcMatrixDim][kMcMatrixDim], Vector3* outCenter, Vector3* outM,
+                                   Vector3* outC, float* halfR, bool* drawMerged) {
+    const Vector3 cluster = BundlerPackageCluster(covIdx, tray, gx, gz, marbleR);
+    const int row = DemoPkgRowIndex(covIdx);
+    const float zMid = oz + gz * static_cast<float>(std::max(0, nGrid - 1)) * 0.5f;
+    const float gatherSpread = gx * 0.38f;
+    const float ang = static_cast<float>(row) * (6.2831853f / 7.f);
+    const Vector3 gather = {std::cos(ang) * gatherSpread * 0.35f, landY + amp * 0.58f,
+                            zMid + std::sin(ang) * gatherSpread * 0.35f};
+
+    *halfR = marbleR * 0.5f;
+    *drawMerged = static_cast<int>(ph) < static_cast<int>(McStoryPhase::SplitHalves);
+    (void)nMarbles;
+
+    Vector3 merged = cluster;
+    if (static_cast<int>(ph) <= static_cast<int>(McStoryPhase::UnbundleWrap)) {
+        merged = cluster;
+    } else if (ph == McStoryPhase::GatherCenter) {
+        merged = Vector3Lerp(cluster, gather, EaseInOutCubic(u));
+    } else if (ph == McStoryPhase::SplitHalves) {
+        merged = gather;
+    } else if (ph == McStoryPhase::AssignColumns) {
+        merged = gather;
+    } else {
+        merged = gather;
+    }
+
+    float splitAmt = 0.f;
+    if (static_cast<int>(ph) > static_cast<int>(McStoryPhase::GatherCenter)) {
+        if (ph == McStoryPhase::SplitHalves) {
+            splitAmt = EaseInOutCubic(u);
+        } else {
+            splitAmt = 1.f;
+        }
+    }
+
+    const float sep = gx * 0.28f * splitAmt;
+    Vector3 mSide = {merged.x - sep, merged.y, merged.z};
+    Vector3 cSide = {merged.x + sep, merged.y, merged.z};
+
+    Vector3 mEnd = mGrid[row][row];
+    mEnd.y += marbleR * 0.95f;
+    Vector3 cEnd = cGrid[row][row];
+    cEnd.y += marbleR * 0.95f;
+    if (ph == McStoryPhase::AssignColumns) {
+        const float e = EaseInOutCubic(u);
+        mSide = Vector3Lerp(mSide, mEnd, e);
+        cSide = Vector3Lerp(cSide, cEnd, e);
+    } else if (static_cast<int>(ph) > static_cast<int>(McStoryPhase::AssignColumns)) {
+        mSide = mEnd;
+        cSide = cEnd;
+    }
+
+    *outCenter = merged;
+    *outM = mSide;
+    *outC = cSide;
+}
+
+static Vector3 ComputeBundlerMarblePos(int covIdx, int nMarbles, int nGrid, float ox, float oz, float gx, float gz,
+                                       float landY, float amp, float marbleR, BundlerStoryPhase ph, float u,
+                                       const Vector3& tray) {
+    float bx = 0.f;
+    float bz = 0.f;
+    BundlerBaseXZ(covIdx, nGrid, nMarbles, ox, oz, gx, gz, &bx, &bz);
+    const Vector3 plane = {bx, landY, bz};
+    const float rise = amp * 0.42f;
+    const Vector3 floodHeld = {tray.x + gx * 0.12f, tray.y + marbleR * 2.08f, tray.z - gz * 0.06f};
+
+    auto stagingLerp = [&](float blend) -> Vector3 {
+        if (!DemoIsStagingMarble(covIdx)) {
+            return plane;
+        }
+        const Vector3 sw = BundlerStagingWorld(covIdx, tray, gx, amp);
+        const float e = EaseInOutCubic(blend);
+        return {bx + (sw.x - bx) * e, landY + (sw.y - landY) * e, bz + (sw.z - bz) * e};
+    };
+
+    auto posBeforeWrap = [&]() -> Vector3 {
+        if (DemoIsStagingMarble(covIdx)) {
+            return stagingLerp(1.f);
+        }
+        if (covIdx == kDemoSuccessCov) {
+            return floodHeld;
+        }
+        return plane;
+    };
+
+    switch (ph) {
+        case BundlerStoryPhase::FadeScene:
+        case BundlerStoryPhase::Checkmarks:
+            return plane;
+        case BundlerStoryPhase::RiseStaging:
+            return stagingLerp(u);
+        case BundlerStoryPhase::SuccessFlood:
+            if (DemoIsStagingMarble(covIdx)) {
+                return stagingLerp(1.f);
+            }
+            if (covIdx != kDemoSuccessCov) {
+                return plane;
+            }
+            if (u < 0.24f) {
+                const float e = EaseOutCubic(u / 0.24f);
+                return {bx, landY + rise * e, bz};
+            }
+            if (u < 0.62f) {
+                return {bx, landY + rise, bz};
+            }
+            {
+                const float e = EaseInOutCubic((u - 0.62f) / (1.f - 0.62f));
+                const Vector3 hi = {bx, landY + rise, bz};
+                return Vector3Lerp(hi, floodHeld, e);
+            }
+        case BundlerStoryPhase::FailFloaterDep:
+            if (DemoIsStagingMarble(covIdx)) {
+                return stagingLerp(1.f);
+            }
+            if (covIdx == kDemoSuccessCov) {
+                return floodHeld;
+            }
+            if (covIdx != kDemoFailDepCov) {
+                return plane;
+            }
+            if (u < 0.22f) {
+                const float e = EaseOutCubic(u / 0.22f);
+                return {bx, landY + rise * e, bz};
+            }
+            if (u < 0.72f) {
+                return {bx, landY + rise, bz};
+            }
+            {
+                const float e = EaseInOutCubic((u - 0.72f) / 0.28f);
+                return {bx, landY + rise * (1.f - e), bz};
+            }
+        case BundlerStoryPhase::FailExcessIncompat:
+            if (DemoIsStagingMarble(covIdx)) {
+                return stagingLerp(1.f);
+            }
+            if (covIdx == kDemoSuccessCov) {
+                return floodHeld;
+            }
+            if (covIdx != kDemoFailIncompatCov) {
+                return plane;
+            }
+            if (u < 0.22f) {
+                const float e = EaseOutCubic(u / 0.22f);
+                return {bx, landY + rise * e, bz};
+            }
+            if (u < 0.72f) {
+                return {bx, landY + rise, bz};
+            }
+            {
+                const float e = EaseInOutCubic((u - 0.72f) / 0.28f);
+                return {bx, landY + rise * (1.f - e), bz};
+            }
+        case BundlerStoryPhase::WrapBundle: {
+            const Vector3 prev = posBeforeWrap();
+            if (!DemoPackageContains(covIdx)) {
+                return prev;
+            }
+            const Vector3 tgt = BundlerPackageCluster(covIdx, tray, gx, gz, marbleR);
+            const float e = EaseInOutCubic(u);
+            return Vector3Lerp(prev, tgt, e);
+        }
+        case BundlerStoryPhase::Done:
+        default:
+            if (DemoPackageContains(covIdx)) {
+                return BundlerPackageCluster(covIdx, tray, gx, gz, marbleR);
+            }
+            return posBeforeWrap();
+    }
+}
+
+static void DrawStoryFloorGrid(float ox, float oz, float gx, float gz, int n, const Color& col,
+                               float lineAlpha = 1.f) {
+    if (lineAlpha < 0.004f) {
+        return;
+    }
+    Color c = col;
+    c.a = static_cast<unsigned char>(
+        std::round(static_cast<float>(col.a) * std::max(0.f, std::min(1.f, lineAlpha))));
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
             const float x0 = ox + i * gx;
             const float z0 = oz + j * gz;
             if (i + 1 < n) {
-                DrawLine3D({x0, 0.f, z0}, {ox + (i + 1) * gx, 0.f, z0}, col);
+                DrawLine3D({x0, 0.f, z0}, {ox + (i + 1) * gx, 0.f, z0}, c);
             }
             if (j + 1 < n) {
-                DrawLine3D({x0, 0.f, z0}, {x0, 0.f, oz + (j + 1) * gz}, col);
+                DrawLine3D({x0, 0.f, z0}, {x0, 0.f, oz + (j + 1) * gz}, c);
             }
         }
     }
@@ -710,6 +1803,23 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    double lambdaLogMin = 0.0;
+    double lambdaLogMax = 1.0;
+    if (surf.parametricLambda) {
+        const double lr = std::max(surf.lambdaLive, 1e-15);
+        lambdaLogMin = std::log10(lr) - 3.0;
+        lambdaLogMax = std::log10(lr) + 3.0;
+        if (!(lambdaLogMax > lambdaLogMin)) {
+            lambdaLogMax = lambdaLogMin + 1.0;
+        }
+    }
+    bool lambdaSliderDragging = false;
+    const double marginSLogMin = std::log10(0.12);
+    const double marginSLogMax = std::log10(18.0);
+    bool marginScaleEnabled = false;
+    double marginScaleS = 1.0;
+    bool marginSliderDragging = false;
+
     const int sw = 1400;
     const int sh = 900;
     char winTitle[96];
@@ -722,21 +1832,44 @@ int main(int argc, char** argv) {
     camera.fovy = 45.0f;
     camera.projection = CAMERA_PERSPECTIVE;
     camera.target = {0.0f, 0.0f, 0.0f};
-    camera.position = {static_cast<float>(surf.n) * 0.9f, static_cast<float>(surf.n) * 0.55f,
-                       static_cast<float>(surf.n) * 0.9f};
     camera.up = {0.0f, 1.0f, 0.0f};
 
-    const double scaleDen = std::max(MaxAbsQ(surf), 1e-12);
+    double scaleDen = std::max(MaxAbsQ(surf), 1e-12);
     const float amp = static_cast<float>(std::max(surf.n, 3)) * 0.35f;
     const float gx = 1.0f;
     const float gz = 1.0f;
     const float ox = -(surf.n - 1) * gx * 0.5f;
     const float oz = -(surf.n - 1) * gz * 0.5f;
 
-    auto gridPos = [&](int i, int j) -> Vector3 {
-        double qij = surf.qAt(i, j);
-        float y = static_cast<float>(qij / scaleDen) * amp;
-        return {ox + i * gx, y, oz + j * gz};
+    int qBlockBaseI = 0;
+    int qBlockBaseJ = 0;
+    int qMeshN = 1;
+    ComputeDemoQBlock(surf, &qBlockBaseI, &qBlockBaseJ, &qMeshN);
+    double scaleDenBlock =
+        std::max(MaxAbsQSubmatrix(surf, qBlockBaseI, qBlockBaseJ, qMeshN), 1e-12);
+    const float ampBlock = static_cast<float>(std::max(qMeshN, 3)) * 0.32f;
+    /** Match the story floor grid (DrawStoryFloorGrid / marble land), not the denser teal Q tile pitch. */
+    const int floorSpanCells = std::max(1, surf.n - 1);
+    const float matSpanWorldX = static_cast<float>(floorSpanCells) * gx;
+    const float matSpanWorldZ = static_cast<float>(floorSpanCells) * gz;
+    /** Stretch qMeshN×qMeshN over the full n×n floor footprint so it replaces the underlying mesh visually. */
+    const float gxQBlock =
+        (qMeshN > 1) ? (matSpanWorldX / static_cast<float>(qMeshN - 1)) : gx;
+    const float gzQBlock =
+        (qMeshN > 1) ? (matSpanWorldZ / static_cast<float>(qMeshN - 1)) : gz;
+    const float oxBlock = -(qMeshN - 1) * gxQBlock * 0.5f;
+    const float ozBlock = -(qMeshN - 1) * gzQBlock * 0.5f;
+
+    // Default orbit: far enough to frame the full n×n story floor (step 0+); not capped to the small Q mesh.
+    const float camRadial = static_cast<float>(std::max(surf.n + 6, qMeshN + 8)) * 0.82f;
+    camera.position = {camRadial * 1.0f, camRadial * 0.58f, camRadial * 1.0f};
+
+    auto gridPosBlock = [&](int i, int j) -> Vector3 {
+        const int gi = qBlockBaseI + i;
+        const int gj = qBlockBaseJ + j;
+        double qij = surf.qAt(gi, gj);
+        float y = static_cast<float>(qij / scaleDenBlock) * ampBlock;
+        return {oxBlock + static_cast<float>(i) * gxQBlock, y, ozBlock + static_cast<float>(j) * gzQBlock};
     };
 
     const int nCoverageMarbles = std::max(0, std::min(surf.nCoverage, surf.n));
@@ -753,6 +1886,22 @@ int main(int argc, char** argv) {
     bool marbleFamilyPlayEntrance = true;
     float depSpreadElapsed = 0.f;
     bool depPlayEntrance = true;
+    float incompatElapsed = 0.f;
+    bool incompatPlayEntrance = true;
+    float bundlerElapsed = 0.f;
+    bool bundlerPlayEntrance = true;
+    float mcElapsed = 0.f;
+    bool mcPlayEntrance = true;
+    float mcMergeElapsed = 0.f;
+    bool mcMergePlayEntrance = true;
+    float qSliceElapsed = 0.f;
+    bool qSlicePlayEntrance = true;
+    /** After slice story reaches Done: mesh stays flat until →; then animates to full Q and advances to QBlockField. */
+    float qBlockExtrudeU = 0.f;
+    bool qBlockExtrudeAnimating = false;
+    float qBlockExtrudeElapsed = 0.f;
+    Vector3 qLabelWorld = {0.f, 0.f, 0.f};
+    bool haveQLabelWorld = false;
 
     while (!WindowShouldClose()) {
         const QMatrixLayout qLay = MakeQMatrixLayout(surf, sh);
@@ -760,18 +1909,77 @@ int main(int argc, char** argv) {
         const Vector2 mouse = GetMousePosition();
         const bool mouseOnQPanel = showQMatrix && CheckCollisionPointRec(mouse, qHit);
 
-        if (!mouseOnQPanel) {
+        if (surf.parametricLambda && IsKeyPressed(KEY_M)) {
+            marginScaleEnabled = !marginScaleEnabled;
+            ApplyLambdaToQ(surf, marginScaleEnabled ? marginScaleS : 1.0);
+        }
+        const double marginScaleEffective = marginScaleEnabled ? marginScaleS : 1.0;
+
+        constexpr float kLambdaSliderScreenX = 20.f;
+        const float marginSliderScreenY = static_cast<float>(sh) - 112.f;
+        const float lambdaSliderScreenY = static_cast<float>(sh) - 76.f;
+        const bool mouseOnLambdaSlider =
+            surf.parametricLambda &&
+            CheckCollisionPointRec(mouse, ParamSliderHitRect(kLambdaSliderScreenX, lambdaSliderScreenY));
+        const bool mouseOnMarginSlider =
+            surf.parametricLambda && marginScaleEnabled &&
+            CheckCollisionPointRec(mouse, ParamSliderHitRect(kLambdaSliderScreenX, marginSliderScreenY));
+        const bool paramUiBlocksOrbit = mouseOnLambdaSlider || lambdaSliderDragging || mouseOnMarginSlider ||
+                                        marginSliderDragging;
+
+        if (!mouseOnQPanel && !paramUiBlocksOrbit) {
             StepTrackball(camera);
         }
-        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !mouseOnQPanel) autoSpin = false;
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !mouseOnQPanel && !paramUiBlocksOrbit) {
+            autoSpin = false;
+        }
         if (IsKeyPressed(KEY_R)) autoSpin = !autoSpin;
         if (IsKeyPressed(KEY_I)) showLegend = !showLegend;
         if (IsKeyPressed(KEY_Q)) showQMatrix = !showQMatrix;
 
+        if (surf.parametricLambda) {
+            if (!IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+                lambdaSliderDragging = false;
+                marginSliderDragging = false;
+            } else if (!mouseOnQPanel) {
+                const Rectangle lamHit = ParamSliderHitRect(kLambdaSliderScreenX, lambdaSliderScreenY);
+                const Rectangle marHit = ParamSliderHitRect(kLambdaSliderScreenX, marginSliderScreenY);
+                const Vector2 mpos = GetMousePosition();
+                if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+                    if (CheckCollisionPointRec(mpos, lamHit)) {
+                        lambdaSliderDragging = true;
+                    } else if (marginScaleEnabled && CheckCollisionPointRec(mpos, marHit)) {
+                        marginSliderDragging = true;
+                    }
+                }
+                if (lambdaSliderDragging) {
+                    float t = (mpos.x - kLambdaSliderScreenX) / kLambdaSliderW;
+                    surf.lambdaLive = LambdaFromSliderT(t, lambdaLogMin, lambdaLogMax);
+                    ApplyLambdaToQ(surf, marginScaleEffective);
+                } else if (marginSliderDragging && marginScaleEnabled) {
+                    float t = (mpos.x - kLambdaSliderScreenX) / kLambdaSliderW;
+                    marginScaleS = LambdaFromSliderT(t, marginSLogMin, marginSLogMax);
+                    ApplyLambdaToQ(surf, marginScaleS);
+                }
+            }
+        }
+        scaleDen = std::max(MaxAbsQ(surf), 1e-12);
+        scaleDenBlock = std::max(MaxAbsQSubmatrix(surf, qBlockBaseI, qBlockBaseJ, qMeshN), 1e-12);
+
         const StoryStep prevStory = storyStep;
         if (IsKeyPressed(KEY_RIGHT)) {
-            const int next = std::min(static_cast<int>(storyStep) + 1, static_cast<int>(StoryStep::Count) - 1);
-            storyStep = static_cast<StoryStep>(next);
+            if (storyStep == StoryStep::QSliceToBlock) {
+                QSliceStoryPhase qRightPh = QSliceStoryPhase::ShowGrid;
+                float qRightU = 0.f;
+                QSliceDecodePhase(qSlicePlayEntrance ? qSliceElapsed : 1.0e6f, &qRightPh, &qRightU);
+                if (qRightPh == QSliceStoryPhase::Done && !qBlockExtrudeAnimating && qBlockExtrudeU < 0.02f) {
+                    qBlockExtrudeAnimating = true;
+                    qBlockExtrudeElapsed = 0.f;
+                }
+            } else {
+                const int next = std::min(static_cast<int>(storyStep) + 1, static_cast<int>(StoryStep::Count) - 1);
+                storyStep = static_cast<StoryStep>(next);
+            }
         }
         if (IsKeyPressed(KEY_LEFT)) {
             const int next = std::max(static_cast<int>(storyStep) - 1, 0);
@@ -788,6 +1996,35 @@ int main(int argc, char** argv) {
             depPlayEntrance = (prevStory == StoryStep::MarblesFamilyColor);
             depSpreadElapsed = 0.f;
         }
+        if (storyStep != prevStory && storyStep == StoryStep::MarblesIncompatibilities) {
+            incompatPlayEntrance = (prevStory == StoryStep::MarblesDependencies);
+            incompatElapsed = 0.f;
+        }
+        if (storyStep != prevStory && storyStep == StoryStep::MarblesBundler) {
+            bundlerPlayEntrance = (prevStory == StoryStep::MarblesIncompatibilities);
+            bundlerElapsed = 0.f;
+        }
+        if (storyStep != prevStory && storyStep == StoryStep::MarblesMcDecompose) {
+            mcPlayEntrance = (prevStory == StoryStep::MarblesBundler);
+            mcElapsed = 0.f;
+        }
+        if (storyStep != prevStory && storyStep == StoryStep::MarblesMcMerge) {
+            mcMergePlayEntrance = (prevStory == StoryStep::MarblesMcDecompose);
+            mcMergeElapsed = 0.f;
+        }
+        if (storyStep != prevStory && storyStep == StoryStep::QSliceToBlock) {
+            qSlicePlayEntrance = (prevStory == StoryStep::MarblesMcMerge);
+            qSliceElapsed = 0.f;
+            qBlockExtrudeU = 0.f;
+            qBlockExtrudeAnimating = false;
+            qBlockExtrudeElapsed = 0.f;
+        }
+        if (prevStory == StoryStep::QSliceToBlock && storyStep != StoryStep::QSliceToBlock &&
+            storyStep != StoryStep::QBlockField) {
+            qBlockExtrudeAnimating = false;
+            qBlockExtrudeU = 0.f;
+            qBlockExtrudeElapsed = 0.f;
+        }
 
         if (storyStep != StoryStep::MarblesFamilyColor) {
             marbleFamilyPhaseElapsed = 0.f;
@@ -799,6 +2036,47 @@ int main(int argc, char** argv) {
             depSpreadElapsed = 0.f;
         } else if (depPlayEntrance) {
             depSpreadElapsed += GetFrameTime();
+        }
+
+        if (storyStep != StoryStep::MarblesIncompatibilities) {
+            incompatElapsed = 0.f;
+        } else if (incompatPlayEntrance) {
+            incompatElapsed += GetFrameTime();
+        }
+
+        if (storyStep != StoryStep::MarblesBundler) {
+            bundlerElapsed = 0.f;
+        } else if (bundlerPlayEntrance) {
+            bundlerElapsed += GetFrameTime();
+        }
+
+        if (storyStep != StoryStep::MarblesMcDecompose) {
+            mcElapsed = 0.f;
+        } else if (mcPlayEntrance) {
+            mcElapsed += GetFrameTime();
+        }
+
+        if (storyStep != StoryStep::MarblesMcMerge) {
+            mcMergeElapsed = 0.f;
+        } else if (mcMergePlayEntrance) {
+            mcMergeElapsed += GetFrameTime();
+        }
+
+        if (storyStep != StoryStep::QSliceToBlock) {
+            qSliceElapsed = 0.f;
+        } else if (qSlicePlayEntrance) {
+            qSliceElapsed += GetFrameTime();
+        }
+
+        if (storyStep == StoryStep::QSliceToBlock && qBlockExtrudeAnimating) {
+            qBlockExtrudeElapsed += GetFrameTime();
+            const float kQBlockExtrudeDur = 1.15f;
+            qBlockExtrudeU = SmoothStep(std::min(1.f, qBlockExtrudeElapsed / kQBlockExtrudeDur));
+            if (qBlockExtrudeElapsed >= kQBlockExtrudeDur) {
+                qBlockExtrudeAnimating = false;
+                qBlockExtrudeU = 1.f;
+                storyStep = StoryStep::QBlockField;
+            }
         }
 
         if (autoSpin) {
@@ -815,10 +2093,15 @@ int main(int argc, char** argv) {
 
         BeginDrawing();
         ClearBackground(BLACK);
+        Vector3 mcLabelWorldM = {0.f, 0.f, 0.f};
+        Vector3 mcLabelWorldC = {0.f, 0.f, 0.f};
+        bool mcHaveMatrixLabels = false;
+        haveQLabelWorld = false;
         BeginMode3D(camera);
 
         if (storyStep == StoryStep::MarblesDropWhite || storyStep == StoryStep::MarblesFamilyColor ||
-            storyStep == StoryStep::MarblesDependencies) {
+            storyStep == StoryStep::MarblesDependencies || storyStep == StoryStep::MarblesIncompatibilities ||
+            storyStep == StoryStep::MarblesBundler) {
             DrawStoryFloorGrid(ox, oz, gx, gz, surf.n, g_style.storyFloorLine);
 
             const int nMarbles = nCoverageMarbles;
@@ -828,7 +2111,44 @@ int main(int argc, char** argv) {
             const double now = GetTime();
             const float rawT = static_cast<float>(now - marbleAnimT0);
             const bool colorByFamily = (storyStep == StoryStep::MarblesFamilyColor ||
-                                        storyStep == StoryStep::MarblesDependencies);
+                                        storyStep == StoryStep::MarblesDependencies ||
+                                        storyStep == StoryStep::MarblesIncompatibilities ||
+                                        storyStep == StoryStep::MarblesBundler);
+
+            BundlerStoryPhase bunPh = BundlerStoryPhase::FadeScene;
+            float bunU = 0.f;
+            Vector3 bundlerTrayCenter = {0.f, 0.f, 0.f};
+            if (storyStep == StoryStep::MarblesBundler) {
+                BundlerDecodePhase(bundlerPlayEntrance ? bundlerElapsed : 1.0e6f, &bunPh, &bunU);
+                bundlerTrayCenter = BundlerTrayCenter(ox, oz, gx, gz, surf.n, landY, amp);
+                const float trayFade =
+                    (bunPh == BundlerStoryPhase::FadeScene) ? SmoothStep(bunU) : 1.f;
+                Color trayFill = g_style.bundlerTray;
+                trayFill.a =
+                    static_cast<unsigned char>(std::round(static_cast<float>(trayFill.a) * trayFade));
+                Color trayWire = g_style.bundlerTrayWire;
+                trayWire.a =
+                    static_cast<unsigned char>(std::round(static_cast<float>(trayWire.a) * trayFade));
+                DrawCube(bundlerTrayCenter, gx * 2.35f, marbleR * 0.42f, gz * 2.05f, trayFill);
+                DrawCubeWires(bundlerTrayCenter, gx * 2.35f, marbleR * 0.42f, gz * 2.05f, trayWire);
+                if (bunPh == BundlerStoryPhase::WrapBundle || bunPh == BundlerStoryPhase::Done) {
+                    const float wrapT = (bunPh == BundlerStoryPhase::WrapBundle) ? bunU : 1.f;
+                    const float wrapScale = 0.5f + 0.5f * wrapT;
+                    Color wrapCol = g_style.bundleWrap;
+                    wrapCol.a = static_cast<unsigned char>(
+                        std::round(static_cast<float>(wrapCol.a) * (0.35f + 0.65f * wrapT)));
+                    DrawCube(bundlerTrayCenter,
+                             gx * 2.35f * wrapScale * 1.08f,
+                             marbleR * 2.8f * wrapScale,
+                             gz * 2.05f * wrapScale * 1.08f,
+                             wrapCol);
+                    DrawCubeWires(bundlerTrayCenter,
+                                  gx * 2.35f * wrapScale * 1.08f,
+                                  marbleR * 2.8f * wrapScale,
+                                  gz * 2.05f * wrapScale * 1.08f,
+                                  trayWire);
+                }
+            }
 
             float depSpreadT = 0.f;
             if (storyStep == StoryStep::MarblesDependencies) {
@@ -837,12 +2157,24 @@ int main(int argc, char** argv) {
                 } else {
                     depSpreadT = EaseInOutCubic(std::min(1.f, depSpreadElapsed / kDepSpreadSec));
                 }
+            } else if (storyStep == StoryStep::MarblesIncompatibilities) {
+                depSpreadT = 1.f;
+            }
+
+            float incompatT = 0.f;
+            if (storyStep == StoryStep::MarblesIncompatibilities) {
+                if (!incompatPlayEntrance) {
+                    incompatT = 1.f;
+                } else {
+                    incompatT = EaseInOutCubic(std::min(1.f, incompatElapsed / kIncompatDrawSec));
+                }
             }
 
             float familyColorBlend = 0.f;
             float familyGroupMove = 0.f;
             if (colorByFamily) {
-                if (storyStep == StoryStep::MarblesDependencies) {
+                if (storyStep == StoryStep::MarblesDependencies ||
+                    storyStep == StoryStep::MarblesIncompatibilities || storyStep == StoryStep::MarblesBundler) {
                     familyColorBlend = 1.f;
                     familyGroupMove = 1.f;
                 } else if (!marbleFamilyPlayEntrance) {
@@ -877,15 +2209,26 @@ int main(int argc, char** argv) {
 
                 float lx = scatterX;
                 float lz = scatterZ;
-                if (storyStep == StoryStep::MarblesDependencies) {
+                Vector3 bundlerPos = {0.f, 0.f, 0.f};
+                if (storyStep == StoryStep::MarblesBundler) {
+                    bundlerPos = ComputeBundlerMarblePos(covIdx, nMarbles, surf.n, ox, oz, gx, gz, landY, amp, marbleR,
+                                                         bunPh, bunU, bundlerTrayCenter);
+                    lx = bundlerPos.x;
+                    lz = bundlerPos.z;
+                } else if (storyStep == StoryStep::MarblesDependencies ||
+                           storyStep == StoryStep::MarblesIncompatibilities) {
                     float cx = 0.f;
                     float cz = 0.f;
                     float sx = 0.f;
                     float sz = 0.f;
                     CoverageGroupLandXZ(covIdx, surf.n, nMarbles, ox, oz, gx, gz, &cx, &cz);
                     CoverageSpreadLandXZ(covIdx, surf.n, nMarbles, ox, oz, gx, gz, &sx, &sz);
-                    lx = cx + (sx - cx) * depSpreadT;
-                    lz = cz + (sz - cz) * depSpreadT;
+                    float spreadMul = 1.f;
+                    if (storyStep == StoryStep::MarblesIncompatibilities) {
+                        spreadMul = 1.f + 0.68f * incompatT;
+                    }
+                    lx = cx + (sx - cx) * depSpreadT * spreadMul;
+                    lz = cz + (sz - cz) * depSpreadT * spreadMul;
                 } else if (colorByFamily) {
                     float groupX = scatterX;
                     float groupZ = scatterZ;
@@ -902,7 +2245,10 @@ int main(int argc, char** argv) {
                     if (u > 1.f) u = 1.f;
                     e = EaseOutCubic(u);
                 }
-                const float y = startY + (landY - startY) * e;
+                float y = startY + (landY - startY) * e;
+                if (storyStep == StoryStep::MarblesBundler) {
+                    y = bundlerPos.y;
+                }
                 const Vector3 marbleCenter = {lx, y, lz};
                 if (covIdx >= 0 && covIdx < nMarbles) {
                     marbleCenterForCov[static_cast<size_t>(covIdx)] = marbleCenter;
@@ -930,13 +2276,31 @@ int main(int argc, char** argv) {
                     DrawSphere(marbleCenter, marbleR * 0.88f, fillTint);
                 }
                 DrawSphereWires(marbleCenter, marbleR, 8, 12, wire);
+
+                if (storyStep == StoryStep::MarblesBundler && static_cast<int>(bunPh) >= static_cast<int>(BundlerStoryPhase::Checkmarks) &&
+                    covIdx < nMarbles && DemoPackageContains(covIdx)) {
+                    const float ckFade =
+                        (bunPh == BundlerStoryPhase::Checkmarks) ? SmoothStep(bunU) : 1.f;
+                    Color ck = g_style.checkAccent;
+                    ck.a = static_cast<unsigned char>(std::round(static_cast<float>(ck.a) * ckFade));
+                    const Vector3 tip = {marbleCenter.x, marbleCenter.y + marbleR * 2.15f, marbleCenter.z};
+                    DrawCheckmark3D(tip, marbleR * 1.35f, ck);
+                }
             }
 
-            if (storyStep == StoryStep::MarblesDependencies && depSpreadT > 0.02f && nMarbles > 0) {
+            const bool showDepArrows =
+                (storyStep == StoryStep::MarblesDependencies && depSpreadT > 0.02f) ||
+                (storyStep == StoryStep::MarblesIncompatibilities) ||
+                (storyStep == StoryStep::MarblesBundler);
+            if (showDepArrows && nMarbles > 0) {
                 Color ac = g_style.depArrow;
-                ac.a = static_cast<unsigned char>(
-                    std::round(static_cast<float>(ac.a) *
-                               std::min(1.f, depSpreadT * 1.05f)));
+                float depAlpha = 1.f;
+                if (storyStep == StoryStep::MarblesDependencies) {
+                    depAlpha = std::min(1.f, depSpreadT * 1.05f);
+                } else if (storyStep == StoryStep::MarblesBundler) {
+                    depAlpha = 0.09f;
+                }
+                ac.a = static_cast<unsigned char>(std::round(static_cast<float>(ac.a) * depAlpha));
                 for (const CoverageDependencyEdge& de : kCoverageDependencyEdges) {
                     if (de.requiredIdx < 0 || de.dependentIdx < 0 || de.requiredIdx >= nMarbles ||
                         de.dependentIdx >= nMarbles) {
@@ -947,58 +2311,601 @@ int main(int argc, char** argv) {
                                                       marbleR, ac);
                 }
             }
-        } else {
-            for (int i = 0; i < surf.n; i++) {
-                for (int j = 0; j < surf.n; j++) {
-                    if (i + 1 < surf.n) {
-                        DrawLine3D(gridPos(i, j), gridPos(i + 1, j), g_style.meshLine);
+
+            if (storyStep == StoryStep::MarblesIncompatibilities && incompatT > 0.02f && nMarbles > 0) {
+                Color ic = g_style.incompatLine;
+                ic.a = static_cast<unsigned char>(
+                    std::round(static_cast<float>(ic.a) * std::min(1.f, incompatT * 1.05f)));
+                for (const CoverageIncompatiblePair& ip : kCoverageIncompatiblePairs) {
+                    if (ip.a < 0 || ip.b < 0 || ip.a >= nMarbles || ip.b >= nMarbles) {
+                        continue;
                     }
-                    if (j + 1 < surf.n) {
-                        DrawLine3D(gridPos(i, j), gridPos(i, j + 1), g_style.meshLine);
+                    if (CoverageIsMandatoryFamilyPick(ip.a) || CoverageIsMandatoryFamilyPick(ip.b)) {
+                        continue;
                     }
-                    if (i == j) {
-                        Vector3 p = gridPos(i, j);
-                        DrawLine3D({p.x, 0.0f, p.z}, p, g_style.diagonalLine);
-                    }
+                    DrawIncompatibleBrokenLineBetweenMarbles(marbleCenterForCov[static_cast<size_t>(ip.a)],
+                                                             marbleCenterForCov[static_cast<size_t>(ip.b)], marbleR,
+                                                             ic);
                 }
             }
 
-            if (!surf.x.empty()) {
-                for (int i = 0; i < surf.n; i++) {
-                    if (!surf.x[static_cast<size_t>(i)]) continue;
-                    Vector3 p = gridPos(i, i);
-                    float top = p.y + 0.35f * amp;
-                    DrawLine3D(p, {p.x, top, p.z}, g_style.assignmentLine);
-                    DrawSphere({p.x, top, p.z}, 0.08f * amp, g_style.assignmentLine);
+            if (storyStep == StoryStep::MarblesBundler && nMarbles > 0) {
+                Color icBg = g_style.incompatLine;
+                icBg.a = static_cast<unsigned char>(std::round(static_cast<float>(icBg.a) * 0.1f));
+                for (const CoverageIncompatiblePair& ip : kCoverageIncompatiblePairs) {
+                    if (ip.a < 0 || ip.b < 0 || ip.a >= nMarbles || ip.b >= nMarbles) {
+                        continue;
+                    }
+                    if (CoverageIsMandatoryFamilyPick(ip.a) || CoverageIsMandatoryFamilyPick(ip.b)) {
+                        continue;
+                    }
+                    DrawIncompatibleBrokenLineBetweenMarbles(marbleCenterForCov[static_cast<size_t>(ip.a)],
+                                                             marbleCenterForCov[static_cast<size_t>(ip.b)], marbleR,
+                                                             icBg);
+                }
+
+                if (bunPh == BundlerStoryPhase::SuccessFlood && kDemoSuccessReq < nMarbles &&
+                    kDemoSuccessCov < nMarbles && bunU >= 0.24f && bunU < 0.62f) {
+                    Color ac = g_style.depArrow;
+                    const float w = (bunU - 0.24f) / (0.62f - 0.24f);
+                    const float flash = BundlerFlashTwice(std::max(0.f, std::min(1.f, w)));
+                    ac.a = static_cast<unsigned char>(std::round(static_cast<float>(ac.a) * flash));
+                    DrawDependencyArrowBetweenMarbles(
+                        marbleCenterForCov[static_cast<size_t>(kDemoSuccessReq)],
+                        marbleCenterForCov[static_cast<size_t>(kDemoSuccessCov)], marbleR, ac);
+                }
+
+                if (bunPh == BundlerStoryPhase::FailFloaterDep && kDemoFailDepCov < nMarbles &&
+                    kDemoFailDepReq < nMarbles) {
+                    if (bunU >= 0.22f && bunU < 0.68f) {
+                        Color ac = g_style.depArrow;
+                        const float w = (bunU - 0.22f) / (0.68f - 0.22f);
+                        const float flash = BundlerFlashTwice(std::max(0.f, std::min(1.f, w)));
+                        ac.a = static_cast<unsigned char>(std::round(static_cast<float>(ac.a) * flash));
+                        DrawDependencyArrowBetweenMarbles(
+                            marbleCenterForCov[static_cast<size_t>(kDemoFailDepReq)],
+                            marbleCenterForCov[static_cast<size_t>(kDemoFailDepCov)], marbleR, ac);
+                    }
+                    if (bunU > 0.34f && bunU < 0.62f) {
+                        Vector3 mid = Vector3Lerp(marbleCenterForCov[static_cast<size_t>(kDemoFailDepReq)],
+                                                  marbleCenterForCov[static_cast<size_t>(kDemoFailDepCov)], 0.52f);
+                        mid.y += marbleR * 1.85f;
+                        const Color rx = {235, 55, 55, 240};
+                        DrawMiniRedX3D(mid, marbleR * 0.55f, rx);
+                    }
+                }
+
+                if (bunPh == BundlerStoryPhase::FailExcessIncompat && kDemoFailIncompatCov < nMarbles &&
+                    kDemoIncompatPartner < nMarbles && bunU >= 0.22f && bunU < 0.72f) {
+                    Color icf = g_style.incompatLine;
+                    const float w = (bunU - 0.22f) / (0.72f - 0.22f);
+                    const float flash = BundlerFlashTwice(std::max(0.f, std::min(1.f, w)));
+                    icf.a = static_cast<unsigned char>(std::round(static_cast<float>(icf.a) * flash));
+                    DrawIncompatibleBrokenLineBetweenMarbles(
+                        marbleCenterForCov[static_cast<size_t>(kDemoFailIncompatCov)],
+                        marbleCenterForCov[static_cast<size_t>(kDemoIncompatPartner)], marbleR, icf);
                 }
             }
+        } else if (storyStep == StoryStep::MarblesMcDecompose) {
+            DrawStoryFloorGrid(ox, oz, gx, gz, surf.n, g_style.storyFloorLine);
+
+            const int nMarbles = nCoverageMarbles;
+            const float landY = amp * 0.14f;
+            const float marbleR = 0.052f * amp;
+
+            McStoryPhase mcPh = McStoryPhase::FadeNonPackage;
+            float mcU = 0.f;
+            McDecodePhase(mcPlayEntrance ? mcElapsed : 1.0e6f, &mcPh, &mcU);
+
+            const Vector3 tray = BundlerTrayCenter(ox, oz, gx, gz, surf.n, landY, amp);
+            float mcColStep = gx * 0.44f;
+            float mcRowStep = gx * 1.02f;
+            Vector3 mGrid[kMcMatrixDim][kMcMatrixDim];
+            Vector3 cGrid[kMcMatrixDim][kMcMatrixDim];
+            McMatrixGrids(landY, gx, gz, oz, surf.n, &mcColStep, &mcRowStep, mGrid, cGrid);
+
+            float matAlpha = 0.f;
+            if (static_cast<int>(mcPh) >= static_cast<int>(McStoryPhase::ShowMatrices)) {
+                if (mcPh == McStoryPhase::ShowMatrices) {
+                    matAlpha = SmoothStep(mcU);
+                } else {
+                    matAlpha = 1.f;
+                }
+            }
+            if (matAlpha > 0.02f) {
+                const Color coldCGreen = {0, 48, 34, 255};
+                const Color hotCGreen = g_style.depArrow;
+                DrawMcMatrixPads(mGrid, cGrid, mcColStep, mcRowStep, kMcRowM, kMcRowC, coldCGreen, hotCGreen, matAlpha);
+                Color frameM = {120, 175, 220, 255};
+                Color frameC = {40, static_cast<unsigned char>(std::min(255, g_style.depArrow.g + 40)),
+                                static_cast<unsigned char>(std::min(255, g_style.depArrow.b + 30)), 255};
+                DrawMcMatrixFrames(mGrid, mcColStep, mcRowStep, frameM, matAlpha);
+                DrawMcMatrixFrames(cGrid, mcColStep, mcRowStep, frameC, matAlpha);
+                const Color ballColdM = {20, 55, 110, 255};
+                const Color ballHotM = {0, 102, 204, 255};
+                const Color ballColdC = {0, 55, 40, 255};
+                const Color ballWireM = {150, 210, 255, 220};
+                Color ballWireC = g_style.depArrow;
+                ballWireC.a = 220;
+                DrawMcMatrixCellBalls(mGrid, mcColStep, mcRowStep, kMcRowM, ballColdM, ballHotM, ballWireM, gx,
+                                      matAlpha);
+                DrawMcMatrixCellBalls(cGrid, mcColStep, mcRowStep, kMcRowC, ballColdC, hotCGreen, ballWireC, gx,
+                                      matAlpha);
+                mcHaveMatrixLabels = true;
+                Vector3 bm = McMatrixGridCenter(mGrid);
+                Vector3 bc = McMatrixGridCenter(cGrid);
+                const float lift = amp * 0.52f;
+                mcLabelWorldM = {bm.x, bm.y + lift, bm.z};
+                mcLabelWorldC = {bc.x, bc.y + lift, bc.z};
+            }
+
+            float wrapAlpha = 0.f;
+            if (static_cast<int>(mcPh) <= static_cast<int>(McStoryPhase::ShowMatrices)) {
+                wrapAlpha = 1.f;
+            } else if (mcPh == McStoryPhase::UnbundleWrap) {
+                wrapAlpha = 1.f - SmoothStep(mcU);
+            }
+            if (wrapAlpha > 0.02f) {
+                Color trayFill = g_style.bundlerTray;
+                trayFill.a = static_cast<unsigned char>(
+                    std::round(static_cast<float>(trayFill.a) * wrapAlpha));
+                DrawCube(tray, gx * 2.35f, marbleR * 0.42f, gz * 2.05f, trayFill);
+                DrawCubeWires(tray, gx * 2.35f, marbleR * 0.42f, gz * 2.05f, g_style.bundlerTrayWire);
+                Color wrapCol = g_style.bundleWrap;
+                wrapCol.a = static_cast<unsigned char>(std::round(
+                    static_cast<float>(wrapCol.a) * (0.35f + 0.65f) * wrapAlpha));
+                DrawCube(tray, gx * 2.35f * 1.08f, marbleR * 2.8f, gz * 2.05f * 1.08f, wrapCol);
+                DrawCubeWires(tray, gx * 2.35f * 1.08f, marbleR * 2.8f, gz * 2.05f * 1.08f,
+                              g_style.bundlerTrayWire);
+            }
+
+            float fadeOther = 0.f;
+            if (mcPh == McStoryPhase::FadeNonPackage) {
+                fadeOther = 1.f - SmoothStep(mcU);
+            }
+
+            const Color mFill = {0, 102, 204, 210};
+            const Color mWire = {140, 200, 255, 255};
+            Color cFill = g_style.depArrow;
+            cFill.a = 210;
+            Color cWire = g_style.depArrow;
+            cWire.r = static_cast<unsigned char>(std::min(255, static_cast<int>(cWire.r) + 100));
+            cWire.g = static_cast<unsigned char>(std::min(255, static_cast<int>(cWire.g) + 55));
+            cWire.b = static_cast<unsigned char>(std::min(255, static_cast<int>(cWire.b) + 45));
+
+            for (int dropSlot = 0; dropSlot < nMarbles; dropSlot++) {
+                const size_t ord = static_cast<size_t>(dropSlot);
+                const int covIdx =
+                    (ord < marbleDropOrder.size()) ? marbleDropOrder[ord] : dropSlot;
+
+                if (!DemoPackageContains(covIdx)) {
+                    if (fadeOther < 0.02f) {
+                        continue;
+                    }
+                    const Vector3 p =
+                        McNonPackagePlanePos(covIdx, nMarbles, surf.n, ox, oz, gx, gz, landY);
+                    const Color fam = CoverageFamilyColorBundlingHtml(covIdx);
+                    Color fill = fam;
+                    fill.a = static_cast<unsigned char>(std::round(static_cast<float>(fill.a) * fadeOther));
+                    Color w = fam;
+                    w.a = static_cast<unsigned char>(std::round(static_cast<float>(w.a) * fadeOther));
+                    DrawSphere(p, marbleR * 0.88f, fill);
+                    DrawSphereWires(p, marbleR, 8, 12, w);
+                    continue;
+                }
+
+                Vector3 merged = {0.f, 0.f, 0.f};
+                Vector3 posM = {0.f, 0.f, 0.f};
+                Vector3 posC = {0.f, 0.f, 0.f};
+                float halfR = marbleR * 0.5f;
+                bool drawMerged = true;
+                ComputeMcPackageMarble(covIdx, nMarbles, surf.n, ox, oz, gx, gz, landY, amp, marbleR, mcPh, mcU,
+                                       tray, mGrid, cGrid, &merged, &posM, &posC, &halfR, &drawMerged);
+
+                const Color fam = CoverageFamilyColorBundlingHtml(covIdx);
+                if (drawMerged) {
+                    DrawSphere(merged, marbleR * 0.88f, fam);
+                    DrawSphereWires(merged, marbleR, 8, 12, fam);
+                } else {
+                    Color mf = mFill;
+                    Color cf = cFill;
+                    mf.r = static_cast<unsigned char>(std::min(255, (fam.r + mf.r) / 2));
+                    mf.g = static_cast<unsigned char>(std::min(255, (fam.g + mf.g) / 2));
+                    mf.b = static_cast<unsigned char>(std::min(255, (fam.b + mf.b) / 2));
+                    cf.r = static_cast<unsigned char>(std::min(255, (fam.r + cf.r) / 2));
+                    cf.g = static_cast<unsigned char>(std::min(255, (fam.g + cf.g) / 2));
+                    cf.b = static_cast<unsigned char>(std::min(255, (fam.b + cf.b) / 2));
+                    DrawSphere(posM, halfR * 0.9f, mf);
+                    DrawSphereWires(posM, halfR, 8, 12, mWire);
+                    DrawSphere(posC, halfR * 0.9f, cf);
+                    DrawSphereWires(posC, halfR, 8, 12, cWire);
+                }
+            }
+        } else if (storyStep == StoryStep::MarblesMcMerge) {
+            DrawStoryFloorGrid(ox, oz, gx, gz, surf.n, g_style.storyFloorLine);
+
+            const int nMarbles = nCoverageMarbles;
+            const float landY = amp * 0.14f;
+            const float marbleR = 0.052f * amp;
+
+            McMergeStoryPhase mph = McMergeStoryPhase::FadeOverlays;
+            float mu = 0.f;
+            McMergeDecodePhase(mcMergePlayEntrance ? mcMergeElapsed : 1.0e6f, &mph, &mu);
+
+            McStoryPhase mcPh = McStoryPhase::Done;
+            float mcUDone = 1.f;
+            McDecodePhase(1.0e6f, &mcPh, &mcUDone);
+
+            const Vector3 tray = BundlerTrayCenter(ox, oz, gx, gz, surf.n, landY, amp);
+            float mcColStep = gx * 0.44f;
+            float mcRowStep = gx * 1.02f;
+            Vector3 mGrid[kMcMatrixDim][kMcMatrixDim];
+            Vector3 cGrid[kMcMatrixDim][kMcMatrixDim];
+            McMatrixGrids(landY, gx, gz, oz, surf.n, &mcColStep, &mcRowStep, mGrid, cGrid);
+
+            const Color coldCGreen = {0, 48, 34, 255};
+            const Color hotCGreen = g_style.depArrow;
+
+            float marbleFade = 0.f;
+            if (mph == McMergeStoryPhase::FadeOverlays) {
+                marbleFade = 1.f - SmoothStep(mu);
+            }
+
+            float lift7 = 0.f;
+            if (mph == McMergeStoryPhase::LiftCSeven) {
+                lift7 = amp * 0.48f * EaseInOutCubic(mu);
+            } else if (static_cast<int>(mph) > static_cast<int>(McMergeStoryPhase::FadeOverlays)) {
+                lift7 = amp * 0.48f;
+            }
+
+            float cross7 = 1.f;
+            float crossF = 0.f;
+            if (mph == McMergeStoryPhase::ExpandFullStack) {
+                crossF = SmoothStep(mu);
+                cross7 = 1.f - crossF;
+            } else if (static_cast<int>(mph) > static_cast<int>(McMergeStoryPhase::ExpandFullStack)) {
+                cross7 = 0.f;
+                crossF = 1.f;
+            }
+
+            float mergeU = 0.f;
+            const float stackH = amp * 0.42f;
+            if (mph == McMergeStoryPhase::MergeTeal) {
+                mergeU = EaseInOutCubic(mu);
+            } else if (mph == McMergeStoryPhase::Done) {
+                mergeU = 1.f;
+            }
+
+            const float yCfull = landY + stackH * (1.f - mergeU);
+            const float zMid = oz + gz * static_cast<float>(std::max(0, surf.n - 1)) * 0.5f;
+            const float cxFull = 0.f;
+            const float cellQMerge =
+                std::max(gx * 0.1f, 9.8f * gx / static_cast<float>(std::max(surf.n, 1)));
+            const float thickFull = gx * 0.026f;
+
+            Vector3 cLift[kMcMatrixDim][kMcMatrixDim];
+            McCopyGridLiftC(cGrid, lift7, cLift);
+
+            if (cross7 > 0.02f) {
+                const float a7 = cross7;
+                DrawMcMatrixPads(mGrid, cLift, mcColStep, mcRowStep, kMcRowM, kMcRowC, coldCGreen, hotCGreen, a7);
+                Color frameM = {120, 175, 220, 255};
+                Color frameC = {40, static_cast<unsigned char>(std::min(255, g_style.depArrow.g + 40)),
+                                static_cast<unsigned char>(std::min(255, g_style.depArrow.b + 30)), 255};
+                DrawMcMatrixFrames(mGrid, mcColStep, mcRowStep, frameM, a7);
+                DrawMcMatrixFrames(cLift, mcColStep, mcRowStep, frameC, a7);
+                const float ballA = marbleFade * cross7;
+                if (ballA > 0.02f) {
+                    const Color ballColdM = {20, 55, 110, 255};
+                    const Color ballHotM = {0, 102, 204, 255};
+                    const Color ballColdC = {0, 55, 40, 255};
+                    const Color ballWireM = {150, 210, 255, 220};
+                    Color ballWireC = g_style.depArrow;
+                    ballWireC.a = 220;
+                    DrawMcMatrixCellBalls(mGrid, mcColStep, mcRowStep, kMcRowM, ballColdM, ballHotM, ballWireM, gx,
+                                          ballA);
+                    DrawMcMatrixCellBalls(cLift, mcColStep, mcRowStep, kMcRowC, ballColdC, hotCGreen, ballWireC, gx,
+                                          ballA);
+                }
+            }
+
+            if (crossF > 0.02f) {
+                const Color mColdB = {15, 40, 85, 255};
+                const Color mHotB = {0, 102, 204, 255};
+                const Color tCold = {0, 88, 105, 255};
+                const Color tHot = {25, 188, 185, 255};
+                Color drawMCold = LerpColorRgb(mColdB, tCold, mergeU);
+                Color drawMHot = LerpColorRgb(mHotB, tHot, mergeU);
+                Color drawCCold = LerpColorRgb(coldCGreen, tCold, mergeU);
+                Color drawCHot = LerpColorRgb(hotCGreen, tHot, mergeU);
+                Color wireBaseM = {120, 175, 220, 255};
+                Color wireBaseC = {50, static_cast<unsigned char>(std::min(255, g_style.depArrow.g + 35)),
+                                   static_cast<unsigned char>(std::min(255, g_style.depArrow.b + 25)), 255};
+                Color wireTeal = {95, 210, 205, 255};
+                Color wM = LerpColorRgb(wireBaseM, wireTeal, mergeU);
+                Color wC = LerpColorRgb(wireBaseC, wireTeal, mergeU);
+                const float aF = crossF;
+                if (mergeU >= 0.997f) {
+                    DrawInsuranceCoefficientMatrix(surf.n, surf.n, cxFull, zMid, landY, cellQMerge, cellQMerge, thickFull,
+                                                   tCold, tHot, wireTeal, aF, qMeshN);
+                    haveQLabelWorld = true;
+                    qLabelWorld = {cxFull, landY + amp * 0.5f, zMid};
+                } else {
+                    DrawInsuranceCoefficientMatrix(surf.n, surf.n, cxFull, zMid, landY, cellQMerge, cellQMerge, thickFull,
+                                                   drawMCold, drawMHot, wM, aF, 0);
+                    DrawInsuranceCoefficientMatrix(surf.n, surf.n, cxFull, zMid, yCfull, cellQMerge, cellQMerge, thickFull,
+                                                   drawCCold, drawCHot, wC, aF, 0);
+                }
+            }
+
+            if (marbleFade > 0.02f) {
+                const Color mFill = {0, 102, 204, 210};
+                const Color mWire = {140, 200, 255, 255};
+                Color cFill = g_style.depArrow;
+                cFill.a = 210;
+                Color cWire = g_style.depArrow;
+                cWire.r = static_cast<unsigned char>(std::min(255, static_cast<int>(cWire.r) + 100));
+                cWire.g = static_cast<unsigned char>(std::min(255, static_cast<int>(cWire.g) + 55));
+                cWire.b = static_cast<unsigned char>(std::min(255, static_cast<int>(cWire.b) + 45));
+
+                for (int dropSlot = 0; dropSlot < nMarbles; dropSlot++) {
+                    const size_t ord = static_cast<size_t>(dropSlot);
+                    const int covIdx =
+                        (ord < marbleDropOrder.size()) ? marbleDropOrder[ord] : dropSlot;
+                    if (!DemoPackageContains(covIdx)) {
+                        continue;
+                    }
+                    Vector3 merged = {0.f, 0.f, 0.f};
+                    Vector3 posM = {0.f, 0.f, 0.f};
+                    Vector3 posC = {0.f, 0.f, 0.f};
+                    float halfR = marbleR * 0.5f;
+                    bool drawMerged = true;
+                    ComputeMcPackageMarble(covIdx, nMarbles, surf.n, ox, oz, gx, gz, landY, amp, marbleR, mcPh,
+                                           mcUDone, tray, mGrid, cGrid, &merged, &posM, &posC, &halfR, &drawMerged);
+                    const Color fam = CoverageFamilyColorBundlingHtml(covIdx);
+                    auto applyFade = [marbleFade](Color x) {
+                        x.a = static_cast<unsigned char>(
+                            std::round(static_cast<float>(x.a) * marbleFade));
+                        return x;
+                    };
+                    if (drawMerged) {
+                        Color fill = applyFade(fam);
+                        Color w = applyFade(fam);
+                        DrawSphere(merged, marbleR * 0.88f, fill);
+                        DrawSphereWires(merged, marbleR, 8, 12, w);
+                    } else {
+                        Color mf = mFill;
+                        Color cf = cFill;
+                        mf.r = static_cast<unsigned char>(std::min(255, (fam.r + mf.r) / 2));
+                        mf.g = static_cast<unsigned char>(std::min(255, (fam.g + mf.g) / 2));
+                        mf.b = static_cast<unsigned char>(std::min(255, (fam.b + mf.b) / 2));
+                        cf.r = static_cast<unsigned char>(std::min(255, (fam.r + cf.r) / 2));
+                        cf.g = static_cast<unsigned char>(std::min(255, (fam.g + cf.g) / 2));
+                        cf.b = static_cast<unsigned char>(std::min(255, (fam.b + cf.b) / 2));
+                        mf = applyFade(mf);
+                        cf = applyFade(cf);
+                        Color mw = applyFade(mWire);
+                        Color cw = applyFade(cWire);
+                        DrawSphere(posM, halfR * 0.9f, mf);
+                        DrawSphereWires(posM, halfR, 8, 12, mw);
+                        DrawSphere(posC, halfR * 0.9f, cf);
+                        DrawSphereWires(posC, halfR, 8, 12, cw);
+                    }
+                }
+            }
+        } else if (storyStep == StoryStep::QSliceToBlock) {
+            QSliceStoryPhase qph = QSliceStoryPhase::ShowGrid;
+            float qu = 0.f;
+            QSliceDecodePhase(qSlicePlayEntrance ? qSliceElapsed : 1.0e6f, &qph, &qu);
+
+            float storyFloorA = 1.f;
+            if (qph == QSliceStoryPhase::Fade2D) {
+                storyFloorA = 1.f - SmoothStep(qu);
+            } else if (qph == QSliceStoryPhase::Done) {
+                storyFloorA = 0.f;
+            }
+            DrawStoryFloorGrid(ox, oz, gx, gz, surf.n, g_style.storyFloorLine, storyFloorA);
+
+            const float landYQ = amp * 0.14f;
+            const float zMidQ = oz + gz * static_cast<float>(std::max(0, surf.n - 1)) * 0.5f;
+            const float cxFullQ = 0.f;
+            const float cellQN =
+                std::max(gx * 0.1f, 9.8f * gx / static_cast<float>(std::max(surf.n, 1)));
+            const float thickQ = gx * 0.024f;
+            const Color tColdQ = {0, 88, 105, 255};
+            const Color tHotQ = {25, 188, 185, 255};
+            Color wireTealQ = {95, 210, 205, 255};
+
+            const int ts = std::max(1, std::min(qMeshN, surf.n));
+            const int selTI = qBlockBaseI / ts;
+            const int selTJ = qBlockBaseJ / ts;
+
+            float alphaO = 1.f;
+            float alphaS = 1.f;
+            float hi = 0.f;
+            float morph = 0.f;
+            float meshA = 0.f;
+            const float meshExtrude = qBlockExtrudeU;
+            float planeA = 1.f;
+            float sliceLineA = 1.f;
+
+            if (qph == QSliceStoryPhase::HighlightSel) {
+                hi = 0.14f * (0.5f + 0.5f * std::sin(qu * 6.2831853f * 2.2f));
+            } else if (qph == QSliceStoryPhase::FadeOthers) {
+                alphaO = 1.f - SmoothStep(qu);
+                alphaS = 1.f;
+            } else if (qph == QSliceStoryPhase::ExpandMergeMesh) {
+                alphaO = 0.f;
+                alphaS = 1.f;
+                morph = SmoothStep(qu);
+                meshA = SmoothStep(std::max(0.f, (qu - 0.1f) / 0.9f));
+            } else if (qph == QSliceStoryPhase::Fade2D) {
+                alphaO = 0.f;
+                alphaS = 1.f;
+                morph = 1.f;
+                meshA = 1.f;
+                planeA = 1.f - SmoothStep(qu);
+                sliceLineA = 0.f;
+            } else if (qph == QSliceStoryPhase::Done) {
+                alphaO = 0.f;
+                alphaS = 1.f;
+                morph = 1.f;
+                meshA = 1.f;
+                planeA = 0.f;
+                sliceLineA = 0.f;
+            }
+
+            if (planeA > 0.004f) {
+                DrawTealQMatrixDynamic(surf.n, cxFullQ, zMidQ, landYQ, cellQN, cellQN, thickQ, tColdQ, tHotQ,
+                                       wireTealQ, planeA, ts, selTI, selTJ, alphaO, alphaS, hi, qBlockBaseI,
+                                       qBlockBaseJ, qMeshN, morph, oxBlock, ozBlock, gxQBlock, gzQBlock);
+            }
+            if (sliceLineA > 0.02f && surf.n > ts) {
+                Color cut = {210, 245, 242, 255};
+                DrawQBlockSliceLines(surf.n, cxFullQ, zMidQ, landYQ, cellQN, cellQN, ts, cut,
+                                     sliceLineA * planeA);
+            }
+            if (meshA > 0.02f) {
+                DrawQBlockMesh3D(surf, qBlockBaseI, qBlockBaseJ, qMeshN, oxBlock, ozBlock, gxQBlock, gzQBlock,
+                                 scaleDenBlock, ampBlock, meshA, meshA, meshA, meshExtrude);
+            }
+
+            haveQLabelWorld = true;
+            qLabelWorld = {cxFullQ, landYQ + amp * 0.5f, zMidQ};
+        } else if (storyStep == StoryStep::QBlockField) {
+            // Story floor off here so the n×n grid does not clash with the expanded Q-block mesh.
+            DrawQBlockMesh3D(surf, qBlockBaseI, qBlockBaseJ, qMeshN, oxBlock, ozBlock, gxQBlock, gzQBlock,
+                             scaleDenBlock, ampBlock, 1.f, 1.f, 1.f);
         }
 
         EndMode3D();
 
+        if (storyStep == StoryStep::MarblesMcDecompose) {
+            const float flashA = McMatrixLabelAlpha(mcPlayEntrance ? mcElapsed : 1.0e6f);
+            if (flashA > 0.02f && mcHaveMatrixLabels) {
+                const int fs = 64;
+                auto drawMcFlash = [&](const char* ch, Vector3 world, Color rgb) {
+                    if (!PointInFrontOfCamera(world, camera)) {
+                        return;
+                    }
+                    Vector2 scr = GetWorldToScreen(world, camera);
+                    if (!OnScreen(scr, sw, sh, 80)) {
+                        return;
+                    }
+                    int tw = MeasureText(ch, fs);
+                    Color col = rgb;
+                    col.a = static_cast<unsigned char>(std::round(flashA * 255.f));
+                    DrawText(ch, static_cast<int>(scr.x) - tw / 2, static_cast<int>(scr.y) - fs, fs, col);
+                };
+                drawMcFlash("M", mcLabelWorldM, {230, 245, 255, 255});
+                drawMcFlash("C", mcLabelWorldC, g_style.depArrow);
+            }
+            DrawText("M  — revenue-side base  price_i · margin_i · (1 − delta_m)", 380, 118, 15,
+                     (Color){100, 190, 255, 255});
+            Color ccCaption = g_style.depArrow;
+            DrawText("C  — contribution c_{i,m}  (includes take rate, affinity alpha, (1 + beta·delta))", 720, 118, 15,
+                     ccCaption);
+        }
+
+        if (storyStep == StoryStep::MarblesMcMerge) {
+            McMergeStoryPhase capPh = McMergeStoryPhase::FadeOverlays;
+            float capMu = 0.f;
+            McMergeDecodePhase(mcMergePlayEntrance ? mcMergeElapsed : 1.0e6f, &capPh, &capMu);
+            unsigned char captionA = 255;
+            if (capPh == McMergeStoryPhase::FadeOverlays) {
+                captionA =
+                    static_cast<unsigned char>(std::round(255.f * (1.f - SmoothStep(capMu))));
+            }
+            if (captionA > 4) {
+                Color ml = {100, 190, 255, captionA};
+                DrawText("M  — revenue-side base  price_i · margin_i · (1 − delta_m)", 380, 118, 15, ml);
+                Color cl = g_style.depArrow;
+                cl.a = captionA;
+                DrawText("C  — contribution c_{i,m}  (includes take rate, affinity alpha, (1 + beta·delta))", 720, 118,
+                         15, cl);
+            }
+            unsigned char subA = 255;
+            if (capPh == McMergeStoryPhase::FadeOverlays) {
+                subA = static_cast<unsigned char>(std::round(255.f * SmoothStep(capMu)));
+            }
+            char mergeSub[220];
+            std::snprintf(mergeSub, sizeof(mergeSub),
+                          "Full Q coefficient grid %d×%d (%d coverages + %d slacks) — stack — merge to teal", surf.n,
+                          surf.n, surf.nCoverage, surf.nSlack);
+            DrawText(mergeSub, 120, 138, 13, (Color){145, 205, 210, subA});
+        }
+
+        if (haveQLabelWorld) {
+            float qLabA = 0.f;
+            if (storyStep == StoryStep::MarblesMcMerge) {
+                McMergeStoryPhase qqm = McMergeStoryPhase::FadeOverlays;
+                float qmu = 0.f;
+                McMergeDecodePhase(mcMergePlayEntrance ? mcMergeElapsed : 1.0e6f, &qqm, &qmu);
+                if (static_cast<int>(qqm) < static_cast<int>(McMergeStoryPhase::MergeTeal)) {
+                    qLabA = 0.f;
+                } else if (qqm == McMergeStoryPhase::MergeTeal) {
+                    qLabA = 255.f * SmoothStep((qmu - 0.5f) / 0.5f);
+                } else {
+                    qLabA = 255.f;
+                }
+            } else if (storyStep == StoryStep::QSliceToBlock) {
+                QSliceStoryPhase qq = QSliceStoryPhase::ShowGrid;
+                float qu2 = 0.f;
+                QSliceDecodePhase(qSlicePlayEntrance ? qSliceElapsed : 1.0e6f, &qq, &qu2);
+                float planeQ = 1.f;
+                if (qq == QSliceStoryPhase::Fade2D) {
+                    planeQ = 1.f - SmoothStep(qu2);
+                } else if (qq == QSliceStoryPhase::Done) {
+                    planeQ = 0.f;
+                }
+                qLabA = 255.f * planeQ;
+            }
+            if (qLabA > 3.f && PointInFrontOfCamera(qLabelWorld, camera)) {
+                Vector2 scrq = GetWorldToScreen(qLabelWorld, camera);
+                if (OnScreen(scrq, sw, sh, 90)) {
+                    const int qfs = 64;
+                    int twq = MeasureText("Q", qfs);
+                    Color qcol = {70, 235, 220, static_cast<unsigned char>(qLabA)};
+                    DrawText("Q", static_cast<int>(scrq.x) - twq / 2, static_cast<int>(scrq.y) - qfs, qfs, qcol);
+                }
+            }
+        }
+
         if (storyStep == StoryStep::QBlockField) {
             const Color diagLabelCol = {120, 220, 255, 255};
             const int labelFs = 12;
-            for (int i = 0; i < surf.n; i++) {
-                Vector3 tip = gridPos(i, i);
-                if (!PointInFrontOfCamera(tip, camera)) continue;
-                Vector2 scr = GetWorldToScreen(tip, camera);
-                if (!OnScreen(scr, sw, sh, 40)) continue;
-                char tag[48];
-                if (i < surf.nCoverage) {
-                    std::snprintf(tag, sizeof(tag), "%d  cov", i);
-                } else {
-                    std::snprintf(tag, sizeof(tag), "%d  slk", i);
+            for (int i = 0; i < qMeshN; i++) {
+                for (int j = 0; j < qMeshN; j++) {
+                    const int gi = qBlockBaseI + i;
+                    const int gj = qBlockBaseJ + j;
+                    if (gi != gj) {
+                        continue;
+                    }
+                    Vector3 tip = gridPosBlock(i, j);
+                    if (!PointInFrontOfCamera(tip, camera)) {
+                        continue;
+                    }
+                    Vector2 scr = GetWorldToScreen(tip, camera);
+                    if (!OnScreen(scr, sw, sh, 40)) {
+                        continue;
+                    }
+                    char tag[48];
+                    if (gi < surf.nCoverage) {
+                        std::snprintf(tag, sizeof(tag), "%d  cov", gi);
+                    } else {
+                        std::snprintf(tag, sizeof(tag), "%d  slk", gi);
+                    }
+                    int tw = MeasureText(tag, labelFs);
+                    int tx = static_cast<int>(scr.x) - tw / 2;
+                    int ty = static_cast<int>(scr.y) - labelFs - 4;
+                    DrawText(tag, tx, ty, labelFs, diagLabelCol);
                 }
-                int tw = MeasureText(tag, labelFs);
-                int tx = static_cast<int>(scr.x) - tw / 2;
-                int ty = static_cast<int>(scr.y) - labelFs - 4;
-                DrawText(tag, tx, ty, labelFs, diagLabelCol);
             }
         }
 
         if (showLegend) {
-            DrawLegendPanel(sw, sh, surf, !surf.x.empty());
+            DrawLegendPanel(sw, sh, surf, !surf.x.empty(), surf.parametricLambda, surf.lambdaLive, marginScaleS,
+                            marginScaleEnabled);
         }
 
         if (showQMatrix) {
@@ -1011,15 +2918,53 @@ int main(int argc, char** argv) {
             hudA, sizeof(hudA),
             "QUBO BLOCK — package %d  (this bundle column only; not full multi-package Q)",
             surf.packageIndex);
-        std::snprintf(hudB, sizeof(hudB), "n=%d  (%d coverages + %d slacks)   max|Q|=%.4g   const=%.4g",
-                      surf.n, surf.nCoverage, surf.nSlack, scaleDen, surf.constantOffset);
+        std::snprintf(hudB, sizeof(hudB),
+                      "n=%d (%d cov + %d slk)   3D block %d×%d @(%d,%d)   max|Q|=%.4g   const=%.4g",
+                      surf.n, surf.nCoverage, surf.nSlack, qMeshN, qMeshN, qBlockBaseI, qBlockBaseJ, scaleDen,
+                      surf.constantOffset);
         DrawText(hudA, 20, 18, 17, RAYWHITE);
         DrawText(hudB, 20, 40, 15, (Color){180, 190, 205, 255});
+        if (surf.parametricLambda) {
+            char lamHud[280];
+            if (marginScaleEnabled) {
+                std::snprintf(lamHud, sizeof(lamHud),
+                              "λ = %.6g   s = %.6g   (diag: s·margin + λ·pen_ii; off-diag: λ·pen_ij)",
+                              surf.lambdaLive, marginScaleS);
+            } else {
+                std::snprintf(lamHud, sizeof(lamHud),
+                              "λ = %.6g   s = 1 (fixed)   press M to scale margin diagonal", surf.lambdaLive);
+            }
+            DrawText(lamHud, 20, 62, 13, (Color){100, 215, 195, 255});
+            if (marginScaleEnabled) {
+                DrawText("Margin s (log — drag)   [M] off", static_cast<int>(kLambdaSliderScreenX),
+                         static_cast<int>(marginSliderScreenY) - 20, 13, (Color){140, 175, 220, 255});
+                DrawMarginScaleSlider(kLambdaSliderScreenX, marginSliderScreenY, marginScaleS, marginSLogMin,
+                                      marginSLogMax);
+                char mEnds[96];
+                std::snprintf(mEnds, sizeof(mEnds), "10^%.2f … 10^%.2f", marginSLogMin, marginSLogMax);
+                DrawText(mEnds, static_cast<int>(kLambdaSliderScreenX + kLambdaSliderW + 12),
+                         static_cast<int>(marginSliderScreenY + 1.f), 11, (Color){110, 140, 175, 210});
+            } else {
+                DrawText("Margin s: OFF  —  press M to enable slider", static_cast<int>(kLambdaSliderScreenX),
+                         static_cast<int>(marginSliderScreenY) - 6, 13, (Color){95, 105, 125, 220});
+            }
+            DrawText("Penalty λ (log — drag)", static_cast<int>(kLambdaSliderScreenX),
+                     static_cast<int>(lambdaSliderScreenY) - 20, 13, (Color){150, 175, 195, 255});
+            DrawLambdaPenaltySlider(kLambdaSliderScreenX, lambdaSliderScreenY, surf.lambdaLive, lambdaLogMin,
+                                    lambdaLogMax);
+            char ends[120];
+            std::snprintf(ends, sizeof(ends), "10^%.2f  …  10^%.2f", lambdaLogMin, lambdaLogMax);
+            DrawText(ends, static_cast<int>(kLambdaSliderScreenX + kLambdaSliderW + 12),
+                     static_cast<int>(lambdaSliderScreenY + 1.f), 12,
+                     (Color){120, 135, 155, 220});
+            DrawText(path, 20, 80, 15, GRAY);
+        } else {
+            DrawText(path, 20, 62, 15, GRAY);
+        }
         DrawText(
             "LMB: rotate   wheel: zoom   WASD: pan   SPACE: recenter   R: spin   I: info   Q: Print Q   "
-            "<- / -> : story",
+            "M: margin s   <- / -> : story (Story 7: → extrudes when flat)",
             20, sh - 36, 15, GRAY);
-        DrawText(path, 20, 62, 15, GRAY);
 
         {
             const char* stepLabel = "";
@@ -1031,16 +2976,33 @@ int main(int argc, char** argv) {
                     "(YQH26_data/instance_dependencies.csv)";
             } else if (storyStep == StoryStep::MarblesDependencies) {
                 stepLabel =
-                    "Story 2: spread + requires→dependent arrows (bundling doc palette) — → for Q block";
+                    "Story 2: spread + requires→dependent arrows — → for incompatible pairs "
+                    "(instance_incompatible_pairs.csv)";
+            } else if (storyStep == StoryStep::MarblesIncompatibilities) {
+                stepLabel =
+                    "Story 3: optional add-on incompat pairs — red broken links — → bundler demo (pkg #2)";
+            } else if (storyStep == StoryStep::MarblesBundler) {
+                stepLabel =
+                    "Story 4: bundler — Suburban Homeowner — ✓ / allow / reject — → ILP M & C split";
+            } else if (storyStep == StoryStep::MarblesMcDecompose) {
+                stepLabel =
+                    "Story 5: M vs C matrices (pkg 2) — hemispheres → columns — → full ILP merge";
+            } else if (storyStep == StoryStep::MarblesMcMerge) {
+                stepLabel =
+                    "Story 6: n×n Q (cov+slack) — stack — merge teal + Q label — → slice to block";
+            } else if (storyStep == StoryStep::QSliceToBlock) {
+                stepLabel =
+                    "Story 7: slice Q — flat block when settled — press → to extrude (then Story 8)";
             } else {
-                stepLabel = "Story 3: Q block height field (matrix Q_ij)";
+                stepLabel = "Story 8: Q height field (extracted qMesh × qMesh)";
             }
             DrawText(stepLabel, 20, 104, 15, (Color){140, 200, 255, 255});
         }
 
         if (storyStep == StoryStep::QBlockField && !surf.x.empty()) {
-            char eh[128];
-            std::snprintf(eh, sizeof(eh), "E(x) = x'Qx + const = %.6g", Energy(surf));
+            char eh[160];
+            const double eSub = EnergySubBlock(surf, qBlockBaseI, qBlockBaseJ, qMeshN);
+            std::snprintf(eh, sizeof(eh), "E_sub on block ≈ %.6g  (full file E+const = %.6g)", eSub, Energy(surf));
             DrawText(eh, 20, 126, 17, g_style.assignmentLine);
         }
 
