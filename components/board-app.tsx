@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CollaborationStrip } from "@/components/collaboration-strip";
+import { PlotLightbox, QaoaPlotsTab, type DashboardPlot } from "@/components/qaoa-plots-tab";
 import { Yqh26DataTab } from "@/components/yqh26-data-tab";
 import {
   BoardCard,
@@ -17,7 +18,7 @@ import {
 import type { Yqh26DashboardData } from "@/lib/yqh26-data";
 
 type StorageMode = "local" | "remote";
-type ViewKey = "home" | "dataset";
+type ViewKey = "home" | "dataset" | "plots";
 
 type BoardAppProps = {
   storageMode: StorageMode;
@@ -117,6 +118,7 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
   const [dragState, setDragState] = useState<{ cardId: string; deck: DeckKey } | null>(null);
   const [activeDrop, setActiveDrop] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ViewKey>("home");
+  const [activePlot, setActivePlot] = useState<DashboardPlot | null>(null);
 
   async function syncRemoteBoard() {
     const response = await fetch("/api/board", { cache: "no-store" });
@@ -319,19 +321,33 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
     });
   }
 
+  const headerCopy =
+    activeView === "home"
+      ? {
+          kicker: "Q-gars Workspace",
+          quote:
+            "Track team work across the board, then switch tabs to inspect the full YQH26 insurance bundling instance or QAOA result figures."
+        }
+      : activeView === "dataset"
+        ? {
+            kicker: "Travelers Challenge Summary",
+            quote: "Review the Travelers Challenge dataset summary, package structure, and family coverage details."
+          }
+        : {
+            kicker: "QAOA pipeline · Plots",
+            quote:
+              "Browse benchmark and histogram figures from the local Selene-sim pipeline. Open a thumbnail for the full image and a plain-language reading guide."
+          };
+
   return (
     <main className="page-shell">
       <div className="page-frame">
         <header className="page-header">
           <div className="page-header-layout">
             <div className="page-header-copy">
-              <p className="page-kicker">{activeView === "home" ? "Q-gars Workspace" : "Travelers Challenge Summary"}</p>
+              <p className="page-kicker">{headerCopy.kicker}</p>
               <h1>YQuantum 2026 Dashboard</h1>
-              <p className="page-quote">
-                {activeView === "home"
-                  ? "Track team work across the board, then switch tabs to inspect the full YQH26 insurance bundling instance."
-                  : "Review the Travelers Challenge dataset summary, package structure, and family coverage details."}
-              </p>
+              <p className="page-quote">{headerCopy.quote}</p>
             </div>
 
             <div className="page-header-brand">
@@ -356,6 +372,14 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
               onClick={() => setActiveView("dataset")}
             >
               YQH26 Summary
+            </button>
+            <button
+              type="button"
+              className={`top-tab ${activeView === "plots" ? "top-tab-active" : ""}`}
+              aria-current={activeView === "plots" ? "page" : undefined}
+              onClick={() => setActiveView("plots")}
+            >
+              Plots
             </button>
           </nav>
         </header>
@@ -467,12 +491,18 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
               })}
             </div>
           </section>
-        ) : (
+        ) : activeView === "dataset" ? (
           <div className="dataset-wrap">
             <Yqh26DataTab dataset={dataset} />
           </div>
+        ) : (
+          <div className="dataset-wrap plots-wrap">
+            <QaoaPlotsTab onOpenPlot={setActivePlot} />
+          </div>
         )}
       </div>
+
+      <PlotLightbox plot={activePlot} onClose={() => setActivePlot(null)} />
 
       {activeView === "home" && cardModal ? (
         <div className="overlay" role="presentation" onClick={() => setCardModal(null)}>
