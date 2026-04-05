@@ -1,5 +1,20 @@
 {
+  "name": "yquantum",
+  "private": true,
+  "packageManager": "npm@11.5.2",
+  "engines": {
+    "node": "22.x"
+  },
+  "workspaces": [
+    "WEBPAGE"
+  ],
   "scripts": {
-    "vercel-build": "next build"
+    "dev": "npm run dev --workspace WEBPAGE",
+    "build": "npm run build --workspace WEBPAGE",
+    "start": "npm run start --workspace WEBPAGE",
+    "vercel-build": "npm run build --workspace WEBPAGE"
+  },
+  "devDependencies": {
+    "next": "16.2.2"
   }
 }
