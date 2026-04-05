@@ -24,7 +24,7 @@ SOLUTIONS_DIR = OUTPUT_ROOT / "solutions"
 RUN_SUMMARY_INDEX_PATH = OUTPUT_ROOT / "run_summaries.csv"
 
 # Top-level run config
-ALGORITHM = "qaoa"  # "classical", "qaoa", or "dqi" when implemented
+ALGORITHM = "classical"  # "classical", "qaoa", or "dqi" when implemented
 N_COVERAGES = 10
 M_PACKAGES = 3
 P_DEPTH = 1
