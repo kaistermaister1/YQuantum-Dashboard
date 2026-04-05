@@ -3,8 +3,12 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+
+# Set before any matplotlib import (via src.dqi_visualize).
+os.environ.setdefault("MPLBACKEND", "TkAgg")
 
 import numpy as np
 
@@ -13,82 +17,110 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.dqi_benchmarks import benchmark_dqi_pipeline
-from src.dqi_core import build_hamming_weight_penalty_qubo
-from src.dqi_visualize import plot_bitstring_histogram, plot_convergence
-from src.run_dqi import run_dqi_with_details
+from src.dqi_core import array_to_bitstring, build_hamming_weight_penalty_qubo
+from src.dqi_visualize import LiveBenchmarkComparison, plot_bitstring_histogram, plot_convergence
 
 
-def build_example_qubo(n: int = 10, target_weight: int = 4) -> np.ndarray:
-    """Construct a reproducible 10-variable QUBO with hamming-weight regularization."""
+def build_example_qubo(n: int = 10, target_weight: int = 4) -> tuple[np.ndarray, list[str]]:
+    """Construct a reproducible QUBO and human-readable labels for each binary variable (bundle slot)."""
     rng = np.random.default_rng(26)
     linear_profit = rng.uniform(0.8, 2.0, size=n)
     base_Q = np.zeros((n, n), dtype=float)
     for i in range(n):
-        # Minimize negative profit => maximize profit.
         base_Q[i, i] -= float(linear_profit[i])
-    # Add small pairwise structure.
     for i in range(n):
         for j in range(i + 1, n):
             w = float(rng.uniform(-0.25, 0.45))
             base_Q[i, j] += w
             base_Q[j, i] += w
-    # Encourage selecting approximately target_weight coverages.
     base_Q += build_hamming_weight_penalty_qubo(n=n, target_weight=target_weight, penalty=1.4)
-    return (base_Q + base_Q.T) * 0.5
+    Q = (base_Q + base_Q.T) * 0.5
+    bundle_names = [f"Bundle-{i}" for i in range(n)]
+    return Q, bundle_names
+
+
+def selected_bundle_labels(bitstring: str, names: list[str]) -> list[str]:
+    """Map a 0/1 string to the list of selected bundle names (index i = variable x_i)."""
+    return [names[i] for i, ch in enumerate(bitstring) if ch == "1"]
 
 
 def main() -> int:
     out_dir = ROOT / "artifacts"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    Q = build_example_qubo(n=10, target_weight=4)
-    x_best, value, meta = run_dqi_with_details(
-        Q,
-        p=2,
-        shots=768,
-        seed=7,
-        statistic="mean",
-        mixer="h",
-        max_qubits=50,
-    )
+    Q, bundle_names = build_example_qubo(n=10, target_weight=4)
 
-    print("=== DQI (10-variable, one-shot) ===")
-    print("best bitstring:", meta.bitstring)
-    print("best x:", x_best.astype(int).tolist())
-    print("best value:", value)
-    print("hamming weight:", meta.hamming_weight_full)
-    print("circuit executions:", meta.run_result.n_evaluations)
-
-    conv_path = out_dir / "dqi_objective_10var.png"
-    hist_path = out_dir / "dqi_histogram_10var.png"
-    plot_convergence(
-        meta.run_result.history, out_path=conv_path, title="DQI one-shot objective (10 vars)"
+    live = LiveBenchmarkComparison(
+        title="Best QUBO objective (lower is better) — chart updates as each method finishes",
     )
-    plot_bitstring_histogram(
-        meta.run_result.stats_at_best.bitstring_counts,
-        out_path=hist_path,
-        title="DQI sampled bitstrings (10 vars)",
-    )
-    print("wrote:", conv_path)
-    print("wrote:", hist_path)
-
     bench = benchmark_dqi_pipeline(
         Q,
         p=2,
-        shots=512,
-        dqi_seed=11,
+        shots=768,
+        dqi_seed=7,
         random_seed=12,
         brute_force_max_n=20,
         random_samples=2500,
         include_qaoa_baseline=True,
         mixer="h",
+        progress_callback=live.update,
     )
-    print("\n=== Benchmarks ===")
+
+    live.savefig(out_dir / "dqi_benchmark_comparison.png")
+
+    dqi = bench["dqi"]
+    bits = dqi.extra["bitstring"]
+    picked = selected_bundle_labels(bits, bundle_names)
+    idx_on = [i for i, ch in enumerate(bits) if ch == "1"]
+
+    print("=== DQI best sample ===")
+    print("best bitstring:", bits)
+    print("selected variable indices (1 = include):", idx_on)
+    print("selected bundles:", ", ".join(picked) if picked else "(none)")
+
+    if "bruteforce" in bench:
+        bf = bench["bruteforce"]
+        opt_bits = array_to_bitstring(bf.best_solution)
+        print("\n=== Brute-force optimum (reference) ===")
+        print("best bitstring:", opt_bits)
+        print(
+            "optimal bundles:",
+            ", ".join(selected_bundle_labels(opt_bits, bundle_names)),
+        )
+
+    if "qaoa" in bench:
+        qbits = bench["qaoa"].extra.get("best_bitstring", "")
+        if qbits:
+            print("\n=== QAOA baseline best ===")
+            print("best bitstring:", qbits)
+            print(
+                "bundles:",
+                ", ".join(selected_bundle_labels(qbits, bundle_names)),
+            )
+
+    print("\n=== All methods ===")
     for name, res in bench.items():
         print(
             f"{name:10s}  best={res.best_value: .6f}  "
             f"time={res.runtime_sec: .3f}s  approx_ratio={res.approximation_ratio}"
         )
+
+    conv_path = out_dir / "dqi_objective_10var.png"
+    hist_path = out_dir / "dqi_histogram_10var.png"
+    plot_convergence(
+        dqi.extra["history"], out_path=conv_path, title="DQI one-shot objective (10 vars)"
+    )
+    plot_bitstring_histogram(
+        dqi.extra["bitstring_counts"],
+        out_path=hist_path,
+        title="DQI sampled bitstrings (10 vars)",
+    )
+    print("\nwrote:", conv_path)
+    print("wrote:", hist_path)
+    print("wrote:", out_dir / "dqi_benchmark_comparison.png")
+
+    print("\nClose the live comparison window to exit (or it will stay open).")
+    live.show(block=True)
     return 0
 
 
