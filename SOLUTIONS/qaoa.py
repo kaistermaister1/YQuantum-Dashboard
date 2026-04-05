@@ -1,22 +1,48 @@
-"""Single-file QUBO + QAOA entrypoint for the Travelers insurance bundling problem."""
+"""Build Travelers package-local QUBOs and solve them with QAOA.
+
+Set ``N_COVERAGES``, ``M_PACKAGES``, and ``P_DEPTH`` below, then run this file.
+The script returns the binary solution matrix ``M`` with entries ``x[i, m]``.
+"""
 
 from __future__ import annotations
 
-import argparse
 import csv
 import importlib.util
-import json
 import math
 import os
 import tempfile
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 
-Optimizer = Literal["none", "grid", "random"]
+try:
+    from SOLUTIONS.qaoa_plots import save_training_loss_plot
+except ModuleNotFoundError:
+    from qaoa_plots import save_training_loss_plot
+
+
+# Top-level choices
+N_COVERAGES = 10
+M_PACKAGES = 4
+P_DEPTH = 1
+
+# QAOA settings
+OPTIMIZER = "cobyla"  # "cobyla" or "spsa"
+SHOTS = 256
+SEED = 0
+MAX_QUBITS = 24
+COBYLA_MAXITER = 40
+SPSA_MAXITER = 40
+PENALTY_SCALE = 3.0
+DATA_DIR = Path(__file__).resolve().parent.parent / "subprojects" / "will" / "Travelers" / "docs" / "data" / "YQH26_data"
+PLOTS_DIR = Path(__file__).resolve().parent / "plots"
+
+
+def default_loss_plot_path(n: int, m: int, p: int) -> Path:
+    return PLOTS_DIR / f"qaoa_training_loss_n{n}_m{m}_p{p}.png"
 
 
 @dataclass
@@ -45,17 +71,14 @@ class DependencyRule:
 @dataclass
 class BundlingProblem:
     coverages: list[InsuranceCoverage]
-    num_packages: int = 2
-    max_options_per_package: int = 4
-    discount_factor: float = 0.15
-    price_elasticity: float = -2.0
+    num_packages: int
+    max_options_per_package: int
+    discount_factor: float
     compatibility_rules: list[CompatibilityRule] = field(default_factory=list)
     dependency_rules: list[DependencyRule] = field(default_factory=list)
-    co_take_rates: dict[frozenset[str], float] = field(default_factory=dict)
-    reference_price_factor: float = 2.0
     package_discounts: list[float] | None = None
     segment_affinity: np.ndarray | None = None
-    price_sensitivity_beta: float = 0.0
+    price_sensitivity_beta: float = 1.2
     package_names: list[str] | None = None
 
     @property
@@ -75,16 +98,16 @@ class BundlingProblem:
 
     @property
     def mandatory_families(self) -> dict[str, list[int]]:
-        result: dict[str, list[int]] = {}
-        for family_name, indices in self.families.items():
-            if any(self.coverages[index].is_mandatory_in_family for index in indices):
-                result[family_name] = indices
-        return result
+        return {
+            family: indices
+            for family, indices in self.families.items()
+            if any(self.coverages[index].is_mandatory_in_family for index in indices)
+        }
 
     @property
     def optional_families(self) -> dict[str, list[int]]:
         mandatory = set(self.mandatory_families)
-        return {name: indices for name, indices in self.families.items() if name not in mandatory}
+        return {family: indices for family, indices in self.families.items() if family not in mandatory}
 
     def get_discount(self, package_index: int) -> float:
         if self.package_discounts is not None:
@@ -109,7 +132,6 @@ class QuboBlock:
     Q: np.ndarray
     n_coverage: int
     n_slack: int
-    coverage_offset: int
     penalty_weight: float
     constant_offset: float = 0.0
 
@@ -118,36 +140,59 @@ class QuboBlock:
         return int(self.Q.shape[0])
 
     def energy(self, x: np.ndarray) -> float:
-        bitvec = np.asarray(x, dtype=float).ravel()
-        if bitvec.shape[0] != self.n_vars:
-            raise ValueError(f"x length {bitvec.shape[0]} does not match n_vars={self.n_vars}")
-        return float(bitvec @ self.Q @ bitvec) + float(self.constant_offset)
+        bits = np.asarray(x, dtype=float).ravel()
+        return float(bits @ self.Q @ bits) + float(self.constant_offset)
 
 
 @dataclass
 class QaoaSampleStats:
-    n_qubits: int
-    shots: int
     bitstring_counts: dict[str, int]
     best_bitstring: str
     best_qubo_energy: float
-    constant_offset: float
 
 
 @dataclass
-class QaoaRunSummary:
-    depth: int
-    optimizer: Optimizer
-    objective: float
-    angles: dict[str, float]
+class QaoaOptimizationTrace:
+    objective_values: list[float] = field(default_factory=list)
+    best_objective_values: list[float] = field(default_factory=list)
+
+    def record(self, value: float) -> float:
+        objective = float(value)
+        self.objective_values.append(objective)
+        if not self.best_objective_values:
+            best_objective = objective
+        else:
+            best_objective = min(self.best_objective_values[-1], objective)
+        self.best_objective_values.append(best_objective)
+        return best_objective
+
+
+@dataclass
+class QaoaOptimizationResult:
+    theta: np.ndarray
     stats: QaoaSampleStats
-    package_index: int
-    package_name: str
+    trace: QaoaOptimizationTrace
 
 
-def default_data_dir() -> Path:
-    root = Path(__file__).resolve().parent.parent
-    return root / "subprojects" / "will" / "Travelers" / "docs" / "data" / "YQH26_data"
+def _log(message: str) -> None:
+    print(message, flush=True)
+
+
+def _report_evaluation(
+    block: QuboBlock,
+    evaluation_index: int,
+    value: float,
+    best_objective: float,
+    stats: QaoaSampleStats,
+    elapsed_seconds: float,
+    note: str = "",
+) -> None:
+    suffix = f" ({note})" if note else ""
+    _log(
+        f"[package {block.package_index + 1}] eval {evaluation_index}: "
+        f"mean_energy={value:.6f}, best_mean={best_objective:.6f}, "
+        f"best_sample={stats.best_qubo_energy:.6f}, elapsed={elapsed_seconds:.2f}s{suffix}"
+    )
 
 
 def load_ltm_instance(data_dir: str | Path, beta: float = 1.2) -> BundlingProblem:
@@ -187,11 +232,7 @@ def load_ltm_instance(data_dir: str | Path, beta: float = 1.2) -> BundlingProble
             )
 
     compatibility_rules: list[CompatibilityRule] = []
-    with open(
-        data_path / "instance_incompatible_pairs.csv",
-        newline="",
-        encoding="utf-8",
-    ) as handle:
+    with open(data_path / "instance_incompatible_pairs.csv", newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
             compatibility_rules.append(
                 CompatibilityRule(
@@ -201,18 +242,13 @@ def load_ltm_instance(data_dir: str | Path, beta: float = 1.2) -> BundlingProble
                 )
             )
 
-    coverage_name_to_idx = {coverage.name: index for index, coverage in enumerate(coverages)}
+    coverage_lookup = {coverage.name: index for index, coverage in enumerate(coverages)}
     affinity = np.ones((len(coverages), len(package_names)), dtype=float)
-    with open(
-        data_path / "instance_segment_affinity.csv",
-        newline="",
-        encoding="utf-8",
-    ) as handle:
+    with open(data_path / "instance_segment_affinity.csv", newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
-            coverage_name = row["coverage"]
-            coverage_index = coverage_name_to_idx[coverage_name]
-            for package_index, package_name in enumerate(package_names):
-                affinity[coverage_index, package_index] = float(row[package_name])
+            i = coverage_lookup[row["coverage"]]
+            for m, package_name in enumerate(package_names):
+                affinity[i, m] = float(row[package_name])
 
     return BundlingProblem(
         coverages=coverages,
@@ -231,38 +267,26 @@ def load_ltm_instance(data_dir: str | Path, beta: float = 1.2) -> BundlingProble
 def subsample_problem(problem: BundlingProblem, n_coverages: int, m_packages: int) -> BundlingProblem:
     kept_coverages = problem.coverages[:n_coverages]
     kept_names = {coverage.name for coverage in kept_coverages}
-
-    dependency_rules = [
+    kept_dependencies = [
         rule
         for rule in problem.dependency_rules
         if rule.requires in kept_names and rule.dependent in kept_names
     ]
-    compatibility_rules = [
+    kept_compatibility = [
         rule
         for rule in problem.compatibility_rules
         if rule.coverage_i in kept_names and rule.coverage_j in kept_names
     ]
-
-    package_discounts = (
-        problem.package_discounts[:m_packages] if problem.package_discounts is not None else None
-    )
-    package_names = problem.package_names[:m_packages] if problem.package_names is not None else None
-    affinity = (
-        problem.segment_affinity[:n_coverages, :m_packages]
-        if problem.segment_affinity is not None
-        else None
-    )
-
+    package_discounts = problem.package_discounts[:m_packages] if problem.package_discounts else None
+    package_names = problem.package_names[:m_packages] if problem.package_names else None
+    affinity = problem.segment_affinity[:n_coverages, :m_packages] if problem.segment_affinity is not None else None
     return BundlingProblem(
         coverages=kept_coverages,
         num_packages=m_packages,
         max_options_per_package=problem.max_options_per_package,
         discount_factor=problem.discount_factor,
-        price_elasticity=problem.price_elasticity,
-        compatibility_rules=compatibility_rules,
-        dependency_rules=dependency_rules,
-        co_take_rates=problem.co_take_rates,
-        reference_price_factor=problem.reference_price_factor,
+        compatibility_rules=kept_compatibility,
+        dependency_rules=kept_dependencies,
         package_discounts=package_discounts,
         segment_affinity=affinity,
         price_sensitivity_beta=problem.price_sensitivity_beta,
@@ -271,14 +295,13 @@ def subsample_problem(problem: BundlingProblem, n_coverages: int, m_packages: in
 
 
 def make_c_matrix(problem: BundlingProblem) -> np.ndarray:
-    """Peyton's objective coefficient matrix C[i, m], rewritten without PuLP."""
     c_matrix = np.zeros((problem.N, problem.M), dtype=float)
     beta = problem.price_sensitivity_beta
-    for package_index in range(problem.M):
-        discount = problem.get_discount(package_index)
-        for coverage_index, coverage in enumerate(problem.coverages):
-            affinity = problem.get_affinity(coverage_index, package_index)
-            c_matrix[coverage_index, package_index] = (
+    for m in range(problem.M):
+        discount = problem.get_discount(m)
+        for i, coverage in enumerate(problem.coverages):
+            affinity = problem.get_affinity(i, m)
+            c_matrix[i, m] = (
                 coverage.price
                 * coverage.contribution_margin_pct
                 * (1.0 - discount)
@@ -289,48 +312,28 @@ def make_c_matrix(problem: BundlingProblem) -> np.ndarray:
     return c_matrix
 
 
-def _max_margin_coeff(problem: BundlingProblem, package_index: int) -> float:
-    return float(np.max(np.abs(make_c_matrix(problem)[:, package_index])))
+def default_penalty_weight(problem: BundlingProblem, package_index: int, factor: float = PENALTY_SCALE) -> float:
+    c_matrix = make_c_matrix(problem)
+    return factor * max(float(np.max(np.abs(c_matrix[:, package_index]))), 1.0)
 
 
-def default_penalty_weight(problem: BundlingProblem, package_index: int, factor: float = 3.0) -> float:
-    return factor * max(_max_margin_coeff(problem, package_index), 1.0)
-
-
-def _add_squared_linear_penalty(
-    Q: np.ndarray,
-    coeffs: dict[int, float],
-    rhs: float,
-    penalty_weight: float,
-) -> float:
+def _add_squared_linear_penalty(Q: np.ndarray, coeffs: dict[int, float], rhs: float, lam: float) -> float:
     indices = sorted(coeffs)
     for i in indices:
         ai = coeffs[i]
-        Q[i, i] += penalty_weight * (ai * ai - 2.0 * rhs * ai)
+        Q[i, i] += lam * (ai * ai - 2.0 * rhs * ai)
     for left in range(len(indices)):
         for right in range(left + 1, len(indices)):
             i = indices[left]
             j = indices[right]
-            weight = penalty_weight * coeffs[i] * coeffs[j]
+            weight = lam * coeffs[i] * coeffs[j]
             Q[i, j] += weight
             Q[j, i] += weight
-    return penalty_weight * rhs * rhs
+    return lam * rhs * rhs
 
 
-def build_qubo_block_for_package(
-    problem: BundlingProblem,
-    package_index: int,
-    penalty_weight: float | None = None,
-) -> QuboBlock:
-    if package_index < 0 or package_index >= problem.M:
-        raise ValueError(f"package_index={package_index} is out of range for M={problem.M}")
-
-    lam = (
-        float(penalty_weight)
-        if penalty_weight is not None
-        else default_penalty_weight(problem, package_index)
-    )
-
+def build_qubo_block_for_package(problem: BundlingProblem, package_index: int) -> QuboBlock:
+    lam = default_penalty_weight(problem, package_index)
     N = problem.N
     K = problem.max_options_per_package
     slack_count = 0
@@ -345,24 +348,20 @@ def build_qubo_block_for_package(
     for indices in problem.optional_families.values():
         if len(indices) > 1:
             alloc_slack(1)
-
     cap_slacks = max(1, int(math.ceil(math.log2(K + 1))))
     alloc_slack(cap_slacks)
-
     for rule in problem.compatibility_rules:
         if not rule.compatible:
             alloc_slack(1)
-
-    for _rule in problem.dependency_rules:
+    for _ in problem.dependency_rules:
         alloc_slack(1)
 
     n_slack = slack_count
     Q = np.zeros((N + n_slack, N + n_slack), dtype=float)
     constant_offset = 0.0
-
     c_matrix = make_c_matrix(problem)
-    for coverage_index in range(N):
-        Q[coverage_index, coverage_index] -= c_matrix[coverage_index, package_index]
+    for i in range(N):
+        Q[i, i] -= c_matrix[i, package_index]
 
     slack_count = 0
 
@@ -374,737 +373,365 @@ def build_qubo_block_for_package(
         return indices
 
     for indices in problem.mandatory_families.values():
-        coeffs = {index: 1.0 for index in indices}
-        constant_offset += _add_squared_linear_penalty(Q, coeffs, 1.0, lam)
-
+        constant_offset += _add_squared_linear_penalty(Q, {i: 1.0 for i in indices}, 1.0, lam)
     for indices in problem.optional_families.values():
         if len(indices) <= 1:
             continue
-        slack_index = next_slack(1)[0]
-        coeffs = {index: 1.0 for index in indices}
-        coeffs[slack_index] = 1.0
+        s = next_slack(1)[0]
+        coeffs = {i: 1.0 for i in indices}
+        coeffs[s] = 1.0
         constant_offset += _add_squared_linear_penalty(Q, coeffs, 1.0, lam)
 
-    cap_slack_indices = next_slack(cap_slacks)
-    coeffs_capacity: dict[int, float] = {index: 1.0 for index in range(N)}
-    for bit, slack_index in enumerate(cap_slack_indices):
-        coeffs_capacity[slack_index] = float(2**bit)
-    constant_offset += _add_squared_linear_penalty(Q, coeffs_capacity, float(K), lam)
+    cap_coeffs: dict[int, float] = {i: 1.0 for i in range(N)}
+    for bit, s in enumerate(next_slack(cap_slacks)):
+        cap_coeffs[s] = float(2**bit)
+    constant_offset += _add_squared_linear_penalty(Q, cap_coeffs, float(K), lam)
 
     for rule in problem.compatibility_rules:
         if rule.compatible:
             continue
         i = problem.coverage_index(rule.coverage_i)
         j = problem.coverage_index(rule.coverage_j)
-        slack_index = next_slack(1)[0]
-        coeffs = {i: 1.0, j: 1.0, slack_index: 1.0}
-        constant_offset += _add_squared_linear_penalty(Q, coeffs, 1.0, lam)
+        s = next_slack(1)[0]
+        constant_offset += _add_squared_linear_penalty(Q, {i: 1.0, j: 1.0, s: 1.0}, 1.0, lam)
 
     for rule in problem.dependency_rules:
         i = problem.coverage_index(rule.requires)
         j = problem.coverage_index(rule.dependent)
-        slack_index = next_slack(1)[0]
-        coeffs = {j: 1.0, i: -1.0, slack_index: 1.0}
-        constant_offset += _add_squared_linear_penalty(Q, coeffs, 0.0, lam)
-
-    if slack_count != n_slack:
-        raise RuntimeError("Slack accounting mismatch while building QUBO")
+        s = next_slack(1)[0]
+        constant_offset += _add_squared_linear_penalty(Q, {j: 1.0, i: -1.0, s: 1.0}, 0.0, lam)
 
     return QuboBlock(
         package_index=package_index,
         Q=Q,
         n_coverage=N,
         n_slack=n_slack,
-        coverage_offset=0,
         penalty_weight=lam,
         constant_offset=constant_offset,
     )
 
 
-def build_all_qubo_blocks(
-    problem: BundlingProblem,
-    penalty_weight: float | None = None,
-) -> list[QuboBlock]:
-    blocks: list[QuboBlock] = []
-    for package_index in range(problem.M):
-        package_penalty = (
-            penalty_weight
-            if penalty_weight is not None
-            else default_penalty_weight(problem, package_index)
-        )
-        blocks.append(build_qubo_block_for_package(problem, package_index, package_penalty))
-    return blocks
-
-
-def qubo_to_ising_pauli_coefficients(Q: np.ndarray) -> tuple[float, np.ndarray, list[tuple[int, int, float]]]:
-    Q = np.asarray(Q, dtype=float)
-    Q = (Q + Q.T) * 0.5
-    n = Q.shape[0]
-    c_identity = 0.0
+def qubo_to_ising_pauli_coefficients(Q: np.ndarray) -> tuple[np.ndarray, list[tuple[int, int, float]]]:
+    sym_q = (np.asarray(Q, dtype=float) + np.asarray(Q, dtype=float).T) * 0.5
+    n = sym_q.shape[0]
     c_z = np.zeros(n, dtype=float)
     zz_terms: list[tuple[int, int, float]] = []
-
     for i in range(n):
-        c_identity += Q[i, i] / 2.0
-        c_z[i] += -Q[i, i] / 2.0
-
+        c_z[i] += -sym_q[i, i] / 2.0
     for i in range(n):
         for j in range(i + 1, n):
-            q_ij = Q[i, j]
+            q_ij = sym_q[i, j]
             if q_ij == 0.0:
                 continue
-            c_identity += q_ij / 2.0
             c_z[i] += -q_ij / 2.0
             c_z[j] += -q_ij / 2.0
             zz_terms.append((i, j, q_ij / 2.0))
-
-    return c_identity, c_z, zz_terms
-
-
-def bruteforce_minimize_qubo(
-    Q: np.ndarray,
-    *,
-    constant_offset: float = 0.0,
-    max_n: int = 16,
-) -> tuple[float, np.ndarray]:
-    Q = np.asarray(Q, dtype=float)
-    Q = (Q + Q.T) * 0.5
-    n = Q.shape[0]
-    if n > max_n:
-        raise ValueError(f"n={n} exceeds max_n={max_n} for brute-force minimization")
-
-    best_energy = float("inf")
-    best_x = np.zeros(n, dtype=float)
-    for mask in range(1 << n):
-        x = np.array([float((mask >> bit) & 1) for bit in range(n)], dtype=float)
-        energy = float(x @ Q @ x) + float(constant_offset)
-        if energy < best_energy - 1e-15:
-            best_energy = energy
-            best_x = x.copy()
-    return best_energy, best_x
-
-
-def mean_sample_energy(block: QuboBlock, stats: QaoaSampleStats) -> float:
-    total_shots = sum(stats.bitstring_counts.values())
-    if total_shots <= 0:
-        return float("nan")
-
-    total_energy = 0.0
-    for bitstring, count in stats.bitstring_counts.items():
-        x = np.array([float(int(char)) for char in bitstring], dtype=float)
-        total_energy += float(count) * block.energy(x)
-    return total_energy / float(total_shots)
+    return c_z, zz_terms
 
 
 def _angle_literal_from_radians(phi: float) -> str:
     return repr(2.0 * float(phi) / math.pi)
 
 
-def _guppy_append_cost_layer(
-    lines: list[str],
-    n_qubits: int,
-    c_z: np.ndarray,
-    zz_terms: list[tuple[int, int, float]],
-    gamma: float,
-) -> None:
+def _append_cost_layer(lines: list[str], c_z: np.ndarray, zz_terms: list[tuple[int, int, float]], gamma: float) -> None:
     for i, j, weight in zz_terms:
+        literal = _angle_literal_from_radians(gamma * weight)
+        lines.append(f"    zz_phase(q{i}, q{j}, angle({literal}))")
+    for i, weight in enumerate(c_z):
         if abs(weight) < 1e-15:
             continue
-        literal = _angle_literal_from_radians(gamma * weight)
-        lines.append(f"    cx(q{i}, q{j})")
-        lines.append(f"    rz(q{j}, angle({literal}))")
-        lines.append(f"    cx(q{i}, q{j})")
-
-    for qubit in range(n_qubits):
-        if abs(c_z[qubit]) < 1e-15:
-            continue
-        literal = _angle_literal_from_radians(gamma * float(c_z[qubit]))
-        lines.append(f"    rz(q{qubit}, angle({literal}))")
+        literal = _angle_literal_from_radians(gamma * float(weight))
+        lines.append(f"    rz(q{i}, angle({literal}))")
 
 
-def _guppy_append_mixer_layer(lines: list[str], n_qubits: int, beta_var: str) -> None:
-    for qubit in range(n_qubits):
-        lines.append(f"    rx(q{qubit}, {beta_var})")
-
-
-def _build_guppy_p1_source(
-    n_qubits: int,
-    c_z: np.ndarray,
-    zz_terms: list[tuple[int, int, float]],
-    gamma: float,
-    beta: float,
-) -> str:
-    beta_literal = _angle_literal_from_radians(beta)
+def _build_qaoa_source(c_z: np.ndarray, zz_terms: list[tuple[int, int, float]], gammas: np.ndarray, betas: np.ndarray) -> str:
+    n_qubits = len(c_z)
     lines = [
         "from guppylang import guppy",
         "from guppylang.std.angles import angle",
         "from guppylang.std.builtins import result",
-        "from guppylang.std.quantum import cx, h, measure, qubit, rx, rz",
+        "from guppylang.std.qsystem import rz, zz_phase",
+        "from guppylang.std.quantum import h, measure, qubit, rx",
         "",
         "@guppy",
-        "def qaoa_p1_kernel() -> None:",
-        f"    g_beta = angle({beta_literal})",
+        "def qaoa_kernel() -> None:",
     ]
-
-    for qubit in range(n_qubits):
-        lines.append(f"    q{qubit} = qubit()")
-    for qubit in range(n_qubits):
-        lines.append(f"    h(q{qubit})")
-
-    _guppy_append_cost_layer(lines, n_qubits, c_z, zz_terms, gamma)
-    _guppy_append_mixer_layer(lines, n_qubits, "g_beta")
-
-    for qubit in range(n_qubits):
-        lines.append(f'    result("m{qubit}", measure(q{qubit}))')
+    for layer, beta in enumerate(betas):
+        lines.append(f"    beta_{layer} = angle({_angle_literal_from_radians(float(beta))})")
+    for qubit_index in range(n_qubits):
+        lines.append(f"    q{qubit_index} = qubit()")
+    for qubit_index in range(n_qubits):
+        lines.append(f"    h(q{qubit_index})")
+    for layer, gamma in enumerate(gammas):
+        _append_cost_layer(lines, c_z, zz_terms, float(gamma))
+        for qubit_index in range(n_qubits):
+            lines.append(f"    rx(q{qubit_index}, beta_{layer})")
+    for qubit_index in range(n_qubits):
+        lines.append(f'    result("m{qubit_index}", measure(q{qubit_index}))')
     return "\n".join(lines) + "\n"
 
 
-def _build_guppy_p2_source(
-    n_qubits: int,
-    c_z: np.ndarray,
-    zz_terms: list[tuple[int, int, float]],
-    gamma1: float,
-    beta1: float,
-    gamma2: float,
-    beta2: float,
-) -> str:
-    beta1_literal = _angle_literal_from_radians(beta1)
-    beta2_literal = _angle_literal_from_radians(beta2)
-    lines = [
-        "from guppylang import guppy",
-        "from guppylang.std.angles import angle",
-        "from guppylang.std.builtins import result",
-        "from guppylang.std.quantum import cx, h, measure, qubit, rx, rz",
-        "",
-        "@guppy",
-        "def qaoa_p2_kernel() -> None:",
-        f"    g_beta1 = angle({beta1_literal})",
-        f"    g_beta2 = angle({beta2_literal})",
-    ]
-
-    for qubit in range(n_qubits):
-        lines.append(f"    q{qubit} = qubit()")
-    for qubit in range(n_qubits):
-        lines.append(f"    h(q{qubit})")
-
-    _guppy_append_cost_layer(lines, n_qubits, c_z, zz_terms, gamma1)
-    _guppy_append_mixer_layer(lines, n_qubits, "g_beta1")
-    _guppy_append_cost_layer(lines, n_qubits, c_z, zz_terms, gamma2)
-    _guppy_append_mixer_layer(lines, n_qubits, "g_beta2")
-
-    for qubit in range(n_qubits):
-        lines.append(f'    result("m{qubit}", measure(q{qubit}))')
-    return "\n".join(lines) + "\n"
-
-
-def _load_dynamic_module(path: str, module_name: str):
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("Failed to load generated Guppy module")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _run_qaoa_sample_stats(
-    block: QuboBlock,
-    *,
-    kernel,
-    n_qubits: int,
-    shots: int,
-    seed: int,
-) -> tuple[dict[str, int], str, float]:
-    emulator = kernel.emulator(n_qubits=n_qubits).with_shots(int(shots)).with_seed(int(seed))
-    result = emulator.run()
+def _run_qaoa_on_block(block: QuboBlock, gammas: np.ndarray, betas: np.ndarray, shots: int, seed: int) -> QaoaSampleStats:
+    if block.n_vars > MAX_QUBITS:
+        raise ValueError(f"Block uses {block.n_vars} qubits, which exceeds MAX_QUBITS={MAX_QUBITS}")
+    c_z, zz_terms = qubo_to_ising_pauli_coefficients(block.Q)
+    source = _build_qaoa_source(c_z, zz_terms, gammas, betas)
+    fd, path = tempfile.mkstemp(suffix="_qaoa_dynamic.py", text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(source)
+        spec = importlib.util.spec_from_file_location("qaoa_dynamic", path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("Failed to load generated QAOA module")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        kernel = module.qaoa_kernel
+        kernel.check()
+        emulator = kernel.emulator(n_qubits=block.n_vars).with_shots(int(shots)).with_seed(int(seed))
+        result = emulator.run()
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
     def shot_to_str(shot) -> str:
         values = shot.as_dict()
-        return "".join(str(int(values[f"m{qubit}"])) for qubit in range(n_qubits))
+        return "".join(str(int(values[f"m{i}"])) for i in range(block.n_vars))
 
     counts = Counter(shot_to_str(shot) for shot in result.results)
-    bitstring_counts = dict(counts.most_common())
-
-    best_bitstring: str | None = None
-    best_energy = float("inf")
-    for bitstring in counts:
-        x = np.array([float(int(char)) for char in bitstring], dtype=float)
-        energy = block.energy(x)
-        if energy < best_energy:
-            best_energy = energy
-            best_bitstring = bitstring
-
-    if best_bitstring is None:
-        raise RuntimeError("No QAOA samples were returned")
-    return bitstring_counts, best_bitstring, best_energy
-
-
-def run_qaoa_p1_on_block(
-    block: QuboBlock,
-    gamma: float,
-    beta: float,
-    *,
-    shots: int = 512,
-    seed: int = 0,
-    max_qubits: int = 24,
-) -> QaoaSampleStats:
-    Q = np.asarray(block.Q, dtype=float)
-    n_qubits = Q.shape[0]
-    if n_qubits > max_qubits:
-        raise ValueError(f"n_qubits={n_qubits} exceeds max_qubits={max_qubits}")
-
-    _c_identity, c_z, zz_terms = qubo_to_ising_pauli_coefficients(Q)
-    source = _build_guppy_p1_source(n_qubits, c_z, zz_terms, gamma, beta)
-
-    fd, path = tempfile.mkstemp(suffix="_qaoa_p1_guppy.py", text=True)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(source)
-        module = _load_dynamic_module(path, "qaoa_p1_dynamic")
-        kernel = module.qaoa_p1_kernel
-        kernel.check()
-        bitstring_counts, best_bitstring, best_energy = _run_qaoa_sample_stats(
-            block,
-            kernel=kernel,
-            n_qubits=n_qubits,
-            shots=shots,
-            seed=seed,
-        )
-    finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
-
-    return QaoaSampleStats(
-        n_qubits=n_qubits,
-        shots=int(shots),
-        bitstring_counts=bitstring_counts,
-        best_bitstring=best_bitstring,
-        best_qubo_energy=float(best_energy),
-        constant_offset=float(block.constant_offset),
+    best_bitstring = min(
+        counts,
+        key=lambda bitstring: block.energy(np.array([int(char) for char in bitstring], dtype=float)),
     )
+    best_energy = block.energy(np.array([int(char) for char in best_bitstring], dtype=float))
+    return QaoaSampleStats(dict(counts), best_bitstring, float(best_energy))
 
 
-def run_qaoa_p2_on_block(
-    block: QuboBlock,
-    gamma1: float,
-    beta1: float,
-    gamma2: float,
-    beta2: float,
-    *,
-    shots: int = 512,
-    seed: int = 0,
-    max_qubits: int = 24,
-) -> QaoaSampleStats:
-    Q = np.asarray(block.Q, dtype=float)
-    n_qubits = Q.shape[0]
-    if n_qubits > max_qubits:
-        raise ValueError(f"n_qubits={n_qubits} exceeds max_qubits={max_qubits}")
-
-    _c_identity, c_z, zz_terms = qubo_to_ising_pauli_coefficients(Q)
-    source = _build_guppy_p2_source(n_qubits, c_z, zz_terms, gamma1, beta1, gamma2, beta2)
-
-    fd, path = tempfile.mkstemp(suffix="_qaoa_p2_guppy.py", text=True)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(source)
-        module = _load_dynamic_module(path, "qaoa_p2_dynamic")
-        kernel = module.qaoa_p2_kernel
-        kernel.check()
-        bitstring_counts, best_bitstring, best_energy = _run_qaoa_sample_stats(
-            block,
-            kernel=kernel,
-            n_qubits=n_qubits,
-            shots=shots,
-            seed=seed,
-        )
-    finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
-
-    return QaoaSampleStats(
-        n_qubits=n_qubits,
-        shots=int(shots),
-        bitstring_counts=bitstring_counts,
-        best_bitstring=best_bitstring,
-        best_qubo_energy=float(best_energy),
-        constant_offset=float(block.constant_offset),
-    )
+def _mean_sample_energy(block: QuboBlock, stats: QaoaSampleStats) -> float:
+    total = sum(stats.bitstring_counts.values())
+    energy_sum = 0.0
+    for bitstring, count in stats.bitstring_counts.items():
+        x = np.array([int(char) for char in bitstring], dtype=float)
+        energy_sum += float(count) * block.energy(x)
+    return energy_sum / float(total)
 
 
-def _run_depth1(
-    block: QuboBlock,
-    *,
-    gamma: float,
-    beta: float,
-    shots: int,
-    seed: int,
-    max_qubits: int,
-) -> tuple[float, dict[str, float], QaoaSampleStats]:
-    stats = run_qaoa_p1_on_block(
-        block,
-        gamma=gamma,
-        beta=beta,
-        shots=shots,
-        seed=seed,
-        max_qubits=max_qubits,
-    )
-    return mean_sample_energy(block, stats), {"gamma": gamma, "beta": beta}, stats
+def _split_theta(theta: np.ndarray, p: int) -> tuple[np.ndarray, np.ndarray]:
+    theta = np.asarray(theta, dtype=float)
+    return theta[:p], theta[p:]
 
 
-def _run_depth2(
-    block: QuboBlock,
-    *,
-    gamma1: float,
-    beta1: float,
-    gamma2: float,
-    beta2: float,
-    shots: int,
-    seed: int,
-    max_qubits: int,
-) -> tuple[float, dict[str, float], QaoaSampleStats]:
-    stats = run_qaoa_p2_on_block(
-        block,
-        gamma1=gamma1,
-        beta1=beta1,
-        gamma2=gamma2,
-        beta2=beta2,
-        shots=shots,
-        seed=seed,
-        max_qubits=max_qubits,
-    )
-    return (
-        mean_sample_energy(block, stats),
-        {"gamma1": gamma1, "beta1": beta1, "gamma2": gamma2, "beta2": beta2},
-        stats,
-    )
+def _clip_theta(theta: np.ndarray) -> np.ndarray:
+    return np.clip(np.asarray(theta, dtype=float), 0.0, math.pi)
 
 
-def optimize_qaoa(
-    block: QuboBlock,
-    *,
-    depth: int,
-    optimizer: Optimizer,
-    shots: int = 256,
-    seed: int = 0,
-    grid_points: int = 4,
-    random_samples: int = 16,
-    max_qubits: int = 24,
-    gamma: float | None = None,
-    beta: float | None = None,
-    gamma1: float | None = None,
-    beta1: float | None = None,
-    gamma2: float | None = None,
-    beta2: float | None = None,
-) -> tuple[float, dict[str, float], QaoaSampleStats]:
-    if depth not in {1, 2}:
-        raise ValueError("depth must be 1 or 2")
+def optimize_block_cobyla(block: QuboBlock, p: int, shots: int, seed: int) -> QaoaOptimizationResult:
+    from scipy.optimize import minimize
 
-    if optimizer == "none":
-        if depth == 1:
-            if gamma is None or beta is None:
-                raise ValueError("depth=1 with optimizer=none requires gamma and beta")
-            return _run_depth1(
-                block,
-                gamma=float(gamma),
-                beta=float(beta),
-                shots=shots,
-                seed=seed,
-                max_qubits=max_qubits,
-            )
-        if None in {gamma1, beta1, gamma2, beta2}:
-            raise ValueError("depth=2 with optimizer=none requires gamma1, beta1, gamma2, beta2")
-        return _run_depth2(
-            block,
-            gamma1=float(gamma1),
-            beta1=float(beta1),
-            gamma2=float(gamma2),
-            beta2=float(beta2),
-            shots=shots,
-            seed=seed,
-            max_qubits=max_qubits,
-        )
-
-    best_objective = float("inf")
-    best_angles: dict[str, float] = {}
+    rng = np.random.default_rng(seed)
+    theta0 = rng.uniform(0.0, math.pi, size=2 * p)
+    best_theta = theta0.copy()
     best_stats: QaoaSampleStats | None = None
+    best_objective = float("inf")
+    eval_index = 0
+    trace = QaoaOptimizationTrace()
 
-    if optimizer == "grid":
-        if grid_points < 1:
-            raise ValueError("grid_points must be at least 1")
-        gamma_values = np.linspace(0.0, math.pi, grid_points, dtype=float)
-        beta_values = np.linspace(0.0, math.pi, grid_points, dtype=float)
-        if depth == 1:
-            eval_index = 0
-            for current_gamma in gamma_values:
-                for current_beta in beta_values:
-                    objective, angles, stats = _run_depth1(
-                        block,
-                        gamma=float(current_gamma),
-                        beta=float(current_beta),
-                        shots=shots,
-                        seed=seed + eval_index,
-                        max_qubits=max_qubits,
-                    )
-                    eval_index += 1
-                    if objective < best_objective:
-                        best_objective = objective
-                        best_angles = angles
-                        best_stats = stats
-        else:
-            eval_index = 0
-            for current_gamma1 in gamma_values:
-                for current_beta1 in beta_values:
-                    for current_gamma2 in gamma_values:
-                        for current_beta2 in beta_values:
-                            objective, angles, stats = _run_depth2(
-                                block,
-                                gamma1=float(current_gamma1),
-                                beta1=float(current_beta1),
-                                gamma2=float(current_gamma2),
-                                beta2=float(current_beta2),
-                                shots=shots,
-                                seed=seed + eval_index,
-                                max_qubits=max_qubits,
-                            )
-                            eval_index += 1
-                            if objective < best_objective:
-                                best_objective = objective
-                                best_angles = angles
-                                best_stats = stats
-    elif optimizer == "random":
-        if random_samples < 1:
-            raise ValueError("random_samples must be at least 1")
-        rng = np.random.default_rng(seed)
-        for eval_index in range(random_samples):
-            if depth == 1:
-                objective, angles, stats = _run_depth1(
-                    block,
-                    gamma=float(rng.uniform(0.0, math.pi)),
-                    beta=float(rng.uniform(0.0, math.pi)),
-                    shots=shots,
-                    seed=seed + eval_index,
-                    max_qubits=max_qubits,
-                )
-            else:
-                objective, angles, stats = _run_depth2(
-                    block,
-                    gamma1=float(rng.uniform(0.0, math.pi)),
-                    beta1=float(rng.uniform(0.0, math.pi)),
-                    gamma2=float(rng.uniform(0.0, math.pi)),
-                    beta2=float(rng.uniform(0.0, math.pi)),
-                    shots=shots,
-                    seed=seed + eval_index,
-                    max_qubits=max_qubits,
-                )
-            if objective < best_objective:
-                best_objective = objective
-                best_angles = angles
-                best_stats = stats
-    else:
-        raise ValueError(f"Unsupported optimizer {optimizer!r}")
+    _log(
+        f"[package {block.package_index + 1}] Starting COBYLA on "
+        f"{block.n_vars} qubits ({block.n_coverage} coverage + {block.n_slack} slack), "
+        f"shots={shots}, maxiter={COBYLA_MAXITER}"
+    )
+
+    def objective(theta: np.ndarray) -> float:
+        nonlocal best_theta, best_stats, best_objective, eval_index
+        evaluation_number = eval_index + 1
+        clipped = _clip_theta(theta)
+        gammas, betas = _split_theta(clipped, p)
+        evaluation_start = time.perf_counter()
+        stats = _run_qaoa_on_block(block, gammas, betas, shots=shots, seed=seed + eval_index)
+        value = _mean_sample_energy(block, stats)
+        elapsed_seconds = time.perf_counter() - evaluation_start
+        eval_index += 1
+        note = ""
+        if value < best_objective:
+            best_objective = value
+            best_theta = clipped.copy()
+            best_stats = stats
+            note = "new best"
+        trace.record(value)
+        _report_evaluation(
+            block,
+            evaluation_number,
+            value,
+            best_objective,
+            stats,
+            elapsed_seconds,
+            note=note,
+        )
+        return float(value)
+
+    minimize(objective, theta0, method="COBYLA", options={"maxiter": int(COBYLA_MAXITER)})
+    if best_stats is None:
+        raise RuntimeError("COBYLA did not produce any QAOA evaluations")
+    _log(
+        f"[package {block.package_index + 1}] COBYLA finished after "
+        f"{len(trace.objective_values)} evaluations with best_mean={best_objective:.6f}"
+    )
+    return QaoaOptimizationResult(theta=best_theta, stats=best_stats, trace=trace)
+
+
+def optimize_block_spsa(block: QuboBlock, p: int, shots: int, seed: int) -> QaoaOptimizationResult:
+    rng = np.random.default_rng(seed)
+    theta = rng.uniform(0.0, math.pi, size=2 * p)
+    best_theta = theta.copy()
+    best_stats: QaoaSampleStats | None = None
+    best_objective = float("inf")
+    eval_index = 0
+    trace = QaoaOptimizationTrace()
+    a = 0.15
+    c = 0.12
+    alpha = 0.602
+    gamma_spsa = 0.101
+    stability_A = 10.0
+
+    _log(
+        f"[package {block.package_index + 1}] Starting SPSA on "
+        f"{block.n_vars} qubits ({block.n_coverage} coverage + {block.n_slack} slack), "
+        f"shots={shots}, maxiter={SPSA_MAXITER}"
+    )
+
+    for step in range(SPSA_MAXITER):
+        ak = a / ((step + 1 + stability_A) ** alpha)
+        ck = c / ((step + 1) ** gamma_spsa)
+        delta = rng.choice([-1.0, 1.0], size=2 * p)
+
+        theta_plus = _clip_theta(theta + ck * delta)
+        theta_minus = _clip_theta(theta - ck * delta)
+
+        g_plus, b_plus = _split_theta(theta_plus, p)
+        evaluation_number = eval_index + 1
+        plus_start = time.perf_counter()
+        stats_plus = _run_qaoa_on_block(block, g_plus, b_plus, shots=shots, seed=seed + eval_index)
+        value_plus = _mean_sample_energy(block, stats_plus)
+        plus_elapsed = time.perf_counter() - plus_start
+        eval_index += 1
+
+        g_minus, b_minus = _split_theta(theta_minus, p)
+        evaluation_number_minus = eval_index + 1
+        minus_start = time.perf_counter()
+        stats_minus = _run_qaoa_on_block(block, g_minus, b_minus, shots=shots, seed=seed + eval_index)
+        value_minus = _mean_sample_energy(block, stats_minus)
+        minus_elapsed = time.perf_counter() - minus_start
+        eval_index += 1
+
+        gradient = ((value_plus - value_minus) / (2.0 * ck)) * (1.0 / delta)
+        theta = _clip_theta(theta - ak * gradient)
+
+        for candidate_theta, candidate_stats, candidate_value in (
+            (theta_plus, stats_plus, value_plus),
+            (theta_minus, stats_minus, value_minus),
+        ):
+            if candidate_value < best_objective:
+                best_objective = candidate_value
+                best_theta = candidate_theta.copy()
+                best_stats = candidate_stats
+
+        best_plus = trace.record(value_plus)
+        _report_evaluation(
+            block,
+            evaluation_number,
+            value_plus,
+            best_plus,
+            stats_plus,
+            plus_elapsed,
+            note=f"SPSA step {step + 1} (+)",
+        )
+        best_minus = trace.record(value_minus)
+        _report_evaluation(
+            block,
+            evaluation_number_minus,
+            value_minus,
+            best_minus,
+            stats_minus,
+            minus_elapsed,
+            note=f"SPSA step {step + 1} (-)",
+        )
 
     if best_stats is None:
-        raise RuntimeError("QAOA optimizer did not produce any samples")
-    return best_objective, best_angles, best_stats
+        raise RuntimeError("SPSA did not produce any QAOA evaluations")
+    _log(
+        f"[package {block.package_index + 1}] SPSA finished after "
+        f"{len(trace.objective_values)} evaluations with best_mean={best_objective:.6f}"
+    )
+    return QaoaOptimizationResult(theta=best_theta, stats=best_stats, trace=trace)
 
 
-def run_problem_instance(
-    *,
-    n: int,
-    m: int,
-    package_index: int = 0,
-    depth: int = 1,
-    optimizer: Optimizer = "grid",
-    data_dir: str | Path | None = None,
-    beta: float = 1.2,
-    penalty_weight: float | None = None,
-    shots: int = 256,
-    seed: int = 0,
-    grid_points: int = 4,
-    random_samples: int = 16,
-    max_qubits: int = 24,
-    gamma: float | None = None,
-    beta_angle: float | None = None,
-    gamma1: float | None = None,
-    beta1: float | None = None,
-    gamma2: float | None = None,
-    beta2: float | None = None,
-) -> tuple[BundlingProblem, np.ndarray, QuboBlock, QaoaRunSummary]:
-    problem = load_ltm_instance(data_dir or default_data_dir(), beta=beta)
-    subproblem = subsample_problem(problem, n_coverages=n, m_packages=m)
-    c_matrix = make_c_matrix(subproblem)
-    block = build_qubo_block_for_package(subproblem, package_index, penalty_weight=penalty_weight)
+def optimize_block(block: QuboBlock, p: int, shots: int, seed: int) -> QaoaOptimizationResult:
+    if OPTIMIZER == "cobyla":
+        return optimize_block_cobyla(block, p=p, shots=shots, seed=seed)
+    if OPTIMIZER == "spsa":
+        return optimize_block_spsa(block, p=p, shots=shots, seed=seed)
+    raise ValueError("OPTIMIZER must be 'cobyla' or 'spsa'")
 
-    objective, angles, stats = optimize_qaoa(
-        block,
-        depth=depth,
-        optimizer=optimizer,
-        shots=shots,
-        seed=seed,
-        grid_points=grid_points,
-        random_samples=random_samples,
-        max_qubits=max_qubits,
-        gamma=gamma,
-        beta=beta_angle,
-        gamma1=gamma1,
-        beta1=beta1,
-        gamma2=gamma2,
-        beta2=beta2,
+
+def solve_qaoa_matrix(
+    n: int = N_COVERAGES,
+    m: int = M_PACKAGES,
+    p: int = P_DEPTH,
+    plot_output_path: str | Path | None = None,
+) -> np.ndarray:
+    workflow_start = time.perf_counter()
+    resolved_plot_output_path = (
+        Path(plot_output_path) if plot_output_path is not None else default_loss_plot_path(n=n, m=m, p=p)
+    )
+    _log(f"[workflow] Loading instance data from {DATA_DIR}")
+    problem = subsample_problem(load_ltm_instance(DATA_DIR), n_coverages=n, m_packages=m)
+    blocks = [build_qubo_block_for_package(problem, package_index) for package_index in range(problem.M)]
+    x_matrix = np.zeros((problem.N, problem.M), dtype=int)
+    plot_series: list[tuple[str, list[float], list[float]]] = []
+
+    _log(
+        f"[workflow] Solving {len(blocks)} package-local QUBO blocks "
+        f"(N={problem.N} coverages, M={problem.M} packages, p={p}, optimizer={OPTIMIZER})"
     )
 
-    package_name = (
-        subproblem.package_names[package_index]
-        if subproblem.package_names is not None
-        else f"package_{package_index}"
-    )
-    summary = QaoaRunSummary(
-        depth=depth,
-        optimizer=optimizer,
-        objective=float(objective),
-        angles=angles,
-        stats=stats,
-        package_index=package_index,
-        package_name=package_name,
-    )
-    return subproblem, c_matrix, block, summary
-
-
-def _require_guppy() -> None:
-    try:
-        import guppylang  # noqa: F401
-    except ImportError as exc:  # pragma: no cover
-        raise ImportError(
-            "Running QAOA requires guppylang. Install it with: pip install guppylang numpy"
-        ) from exc
-
-
-def _build_argument_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build a QUBO block and run QAOA on it.")
-    parser.add_argument("--n", type=int, required=True, help="Number of coverages to keep.")
-    parser.add_argument("--m", type=int, required=True, help="Number of packages to keep.")
-    parser.add_argument("--package-index", type=int, default=0, help="Package block to optimize.")
-    parser.add_argument("--depth", type=int, choices=[1, 2], default=1, help="QAOA depth p.")
-    parser.add_argument(
-        "--optimizer",
-        choices=["none", "grid", "random"],
-        default="grid",
-        help="How to choose QAOA angles.",
-    )
-    parser.add_argument("--grid-points", type=int, default=4, help="Points per angle for grid search.")
-    parser.add_argument(
-        "--random-samples",
-        type=int,
-        default=16,
-        help="Number of random angle samples when optimizer=random.",
-    )
-    parser.add_argument("--shots", type=int, default=256, help="Number of Selene shots.")
-    parser.add_argument("--seed", type=int, default=0, help="Base random seed.")
-    parser.add_argument("--beta-factor", type=float, default=1.2, help="Problem beta parameter.")
-    parser.add_argument(
-        "--data-dir",
-        type=Path,
-        default=default_data_dir(),
-        help="Path to the LTM instance CSV directory.",
-    )
-    parser.add_argument(
-        "--penalty-weight",
-        type=float,
-        default=None,
-        help="Override lambda for QUBO penalties.",
-    )
-    parser.add_argument("--max-qubits", type=int, default=24, help="Safety limit for Guppy runs.")
-    parser.add_argument("--gamma", type=float, default=None, help="Depth-1 gamma if optimizer=none.")
-    parser.add_argument("--beta", type=float, default=None, help="Depth-1 beta if optimizer=none.")
-    parser.add_argument("--gamma1", type=float, default=None, help="Depth-2 gamma1 if optimizer=none.")
-    parser.add_argument("--beta1", type=float, default=None, help="Depth-2 beta1 if optimizer=none.")
-    parser.add_argument("--gamma2", type=float, default=None, help="Depth-2 gamma2 if optimizer=none.")
-    parser.add_argument("--beta2", type=float, default=None, help="Depth-2 beta2 if optimizer=none.")
-    parser.add_argument(
-        "--dump-qubo",
-        action="store_true",
-        help="Include the full QUBO matrix in the JSON output.",
-    )
-    return parser
-
-
-def main() -> None:
-    parser = _build_argument_parser()
-    args = parser.parse_args()
-    _require_guppy()
-
-    if args.n < 1 or args.m < 1:
-        raise ValueError("n and m must be positive integers")
-
-    subproblem, c_matrix, block, summary = run_problem_instance(
-        n=args.n,
-        m=args.m,
-        package_index=args.package_index,
-        depth=args.depth,
-        optimizer=args.optimizer,
-        data_dir=args.data_dir,
-        beta=args.beta_factor,
-        penalty_weight=args.penalty_weight,
-        shots=args.shots,
-        seed=args.seed,
-        grid_points=args.grid_points,
-        random_samples=args.random_samples,
-        max_qubits=args.max_qubits,
-        gamma=args.gamma,
-        beta_angle=args.beta,
-        gamma1=args.gamma1,
-        beta1=args.beta1,
-        gamma2=args.gamma2,
-        beta2=args.beta2,
-    )
-
-    bruteforce = None
-    if block.n_vars <= 16:
-        energy, bitvec = bruteforce_minimize_qubo(
-            block.Q,
-            constant_offset=block.constant_offset,
-            max_n=16,
+    for package_index, block in enumerate(blocks):
+        block_start = time.perf_counter()
+        _log(
+            f"[workflow] Package {package_index + 1}/{len(blocks)} block summary: "
+            f"{block.n_vars} qubits = {block.n_coverage} coverage + {block.n_slack} slack"
         )
-        bruteforce = {
-            "energy": float(energy),
-            "bitstring": "".join(str(int(bit)) for bit in bitvec.astype(int)),
-        }
+        result = optimize_block(block, p=p, shots=SHOTS, seed=SEED + package_index * 1000)
+        coverage_bits = np.array([int(char) for char in result.stats.best_bitstring[:problem.N]], dtype=int)
+        x_matrix[:, package_index] = coverage_bits
+        plot_series.append(
+            (
+                f"package {package_index + 1}",
+                result.trace.objective_values,
+                result.trace.best_objective_values,
+            )
+        )
+        _log(
+            f"[workflow] Package {package_index + 1} complete in "
+            f"{time.perf_counter() - block_start:.2f}s with best bitstring "
+            f"{result.stats.best_bitstring[:problem.N]} and sampled QUBO energy "
+            f"{result.stats.best_qubo_energy:.6f}"
+        )
 
-    output = {
-        "data_dir": str(Path(args.data_dir).resolve()),
-        "n_coverages": subproblem.N,
-        "m_packages": subproblem.M,
-        "package_index": block.package_index,
-        "package_name": summary.package_name,
-        "coverages": [coverage.name for coverage in subproblem.coverages],
-        "c_matrix": c_matrix.tolist(),
-        "qubo": {
-            "shape": list(block.Q.shape),
-            "n_coverage": block.n_coverage,
-            "n_slack": block.n_slack,
-            "penalty_weight": float(block.penalty_weight),
-            "constant_offset": float(block.constant_offset),
-        },
-        "qaoa": {
-            "depth": summary.depth,
-            "optimizer": summary.optimizer,
-            "objective": float(summary.objective),
-            "angles": summary.angles,
-            "best_bitstring": summary.stats.best_bitstring,
-            "best_qubo_energy": float(summary.stats.best_qubo_energy),
-            "mean_qubo_energy": float(mean_sample_energy(block, summary.stats)),
-            "shots": summary.stats.shots,
-            "bitstring_counts": summary.stats.bitstring_counts,
-        },
-        "bruteforce_minimum": bruteforce,
-    }
-    if args.dump_qubo:
-        output["qubo"]["matrix"] = block.Q.tolist()
+    if plot_series:
+        plot_path = save_training_loss_plot(plot_series, resolved_plot_output_path)
+        _log(f"[workflow] Saved QAOA training loss plot to {plot_path}")
 
-    print(json.dumps(output, indent=2))
+    _log(f"[workflow] Finished all package-local subproblems in {time.perf_counter() - workflow_start:.2f}s")
+
+    return x_matrix
+
+
+def main() -> np.ndarray:
+    return solve_qaoa_matrix(n=N_COVERAGES, m=M_PACKAGES, p=P_DEPTH)
 
 
 if __name__ == "__main__":
-    main()
+    M = main()
+    print(M)

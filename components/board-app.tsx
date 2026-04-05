@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { CollaborationStrip } from "@/components/collaboration-strip";
 import { Yqh26DataTab } from "@/components/yqh26-data-tab";
 import {
   BoardCard,
@@ -321,35 +322,42 @@ export function BoardApp({ storageMode, dataset }: BoardAppProps) {
   return (
     <main className="page-shell">
       <div className="page-frame">
-        <nav className="top-tabs" aria-label="Workspace sections">
-          <button
-            type="button"
-            className={`top-tab ${activeView === "home" ? "top-tab-active" : ""}`}
-            aria-current={activeView === "home" ? "page" : undefined}
-            onClick={() => setActiveView("home")}
-          >
-            Home
-          </button>
-          <button
-            type="button"
-            className={`top-tab ${activeView === "dataset" ? "top-tab-active" : ""}`}
-            aria-current={activeView === "dataset" ? "page" : undefined}
-            onClick={() => setActiveView("dataset")}
-          >
-            YQH26 Summary
-          </button>
-        </nav>
-
         <header className="page-header">
-          <div className="page-header-copy">
-            <p className="page-kicker">{activeView === "home" ? "Q-gars Workspace" : "Travelers Challenge Summary"}</p>
-            <h1>YQuantum 2026 Dashboard</h1>
-            {activeView === "home" ? (
+          <div className="page-header-layout">
+            <div className="page-header-copy">
+              <p className="page-kicker">{activeView === "home" ? "Q-gars Workspace" : "Travelers Challenge Summary"}</p>
+              <h1>YQuantum 2026 Dashboard</h1>
               <p className="page-quote">
-                Track team work across the board, then switch tabs to inspect the full YQH26 insurance bundling instance.
+                {activeView === "home"
+                  ? "Track team work across the board, then switch tabs to inspect the full YQH26 insurance bundling instance."
+                  : "Review the Travelers Challenge dataset summary, package structure, and family coverage details."}
               </p>
-            ) : null}
+            </div>
+
+            <div className="page-header-brand">
+              <span className="page-header-brand-label">In collaboration with</span>
+              <CollaborationStrip />
+            </div>
           </div>
+
+          <nav className="top-tabs" aria-label="Workspace sections">
+            <button
+              type="button"
+              className={`top-tab ${activeView === "home" ? "top-tab-active" : ""}`}
+              aria-current={activeView === "home" ? "page" : undefined}
+              onClick={() => setActiveView("home")}
+            >
+              Home
+            </button>
+            <button
+              type="button"
+              className={`top-tab ${activeView === "dataset" ? "top-tab-active" : ""}`}
+              aria-current={activeView === "dataset" ? "page" : undefined}
+              onClick={() => setActiveView("dataset")}
+            >
+              YQH26 Summary
+            </button>
+          </nav>
         </header>
 
         {activeView === "home" ? (

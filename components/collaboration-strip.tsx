@@ -1,44 +1,47 @@
 import Image from "next/image";
-import qgarsMark from "@/public/brand/qgars.png";
+import qgarsMark from "@/public/qgars-filled.png";
+import quantinuumMark from "@/subprojects/will/Travelers/docs/assets/logos/quantinuum-logo_horizontal_white.png";
 
 export function CollaborationStrip() {
   return (
-    <header className="collaboration-strip" aria-label="Q-gars in collaboration with challenge sponsors">
-      <div className="collaboration-strip__cluster collaboration-strip__cluster--team">
-        <Image
-          src={qgarsMark}
-          alt="Q-gars"
-          width={520}
-          height={154}
-          className="collaboration-strip__qgars"
-          priority
-        />
-      </div>
-
-      <span className="collaboration-strip__times" aria-hidden="true">
-        ×
+    <div className="collaboration-strip" aria-label="Project partners">
+      <span className="collaboration-strip__logo-wrap collaboration-strip__logo-wrap--qgars">
+        <Image src={qgarsMark} alt="Q-GARS" className="collaboration-strip__logo collaboration-strip__logo--qgars" priority />
       </span>
-
-      <div className="collaboration-strip__cluster collaboration-strip__cluster--sponsors">
-        <span className="collaboration-strip__sponsor-lockup">
-          <img
-            className="collaboration-strip__sponsor-logo collaboration-strip__sponsor-logo--travelers"
-            src="/brand/travelers.svg"
-            alt="Travelers"
-            width={53}
-            height={48}
-          />
-        </span>
-        <span className="collaboration-strip__sponsor-lockup">
-          <img
-            className="collaboration-strip__sponsor-logo collaboration-strip__sponsor-logo--ltm"
-            src="/brand/ltm.svg"
-            alt="LTM"
-            width={180}
-            height={47}
-          />
-        </span>
-      </div>
-    </header>
+      <span className="collaboration-strip__divider" aria-hidden="true">
+        x
+      </span>
+      <span className="collaboration-strip__logo-wrap">
+        <img
+          className="collaboration-strip__logo collaboration-strip__logo--ltm"
+          src="/brand/ltm.svg"
+          alt="LTM"
+          width={180}
+          height={47}
+        />
+      </span>
+      <span className="collaboration-strip__divider" aria-hidden="true">
+        x
+      </span>
+      <span className="collaboration-strip__logo-wrap collaboration-strip__logo-wrap--quantinuum">
+        <Image
+          src={quantinuumMark}
+          alt="Quantinuum"
+          className="collaboration-strip__logo collaboration-strip__logo--quantinuum"
+        />
+      </span>
+      <span className="collaboration-strip__divider" aria-hidden="true">
+        x
+      </span>
+      <span className="collaboration-strip__sponsor-lockup">
+        <img
+          className="collaboration-strip__logo collaboration-strip__logo--travelers"
+          src="/brand/travelers.svg"
+          alt="Travelers"
+          width={53}
+          height={48}
+        />
+      </span>
+    </div>
   );
 }
