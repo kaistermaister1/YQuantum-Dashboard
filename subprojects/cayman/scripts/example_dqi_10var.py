@@ -45,12 +45,10 @@ def main() -> int:
     x_best, value, meta = run_dqi_with_details(
         Q,
         p=2,
-        optimizer="cobyla",
         shots=768,
         seed=7,
-        maxiter=35,
         statistic="mean",
-        mixer="rx",
+        mixer="h",
         max_qubits=50,
         
         ##############################
@@ -58,18 +56,20 @@ def main() -> int:
         ##############################
     )
 
-    print("=== DQI (10-variable) ===")
+    print("=== DQI (10-variable, one-shot) ===")
     print("best bitstring:", meta.bitstring)
     print("best x:", x_best.astype(int).tolist())
     print("best value:", value)
     print("hamming weight:", meta.hamming_weight_full)
-    print("optimizer evaluations:", meta.optimizer_result.n_evaluations)
+    print("circuit executions:", meta.run_result.n_evaluations)
 
-    conv_path = out_dir / "dqi_convergence_10var.png"
+    conv_path = out_dir / "dqi_objective_10var.png"
     hist_path = out_dir / "dqi_histogram_10var.png"
-    plot_convergence(meta.optimizer_result.history, out_path=conv_path, title="DQI convergence (10 vars)")
+    plot_convergence(
+        meta.run_result.history, out_path=conv_path, title="DQI one-shot objective (10 vars)"
+    )
     plot_bitstring_histogram(
-        meta.optimizer_result.stats_at_best.bitstring_counts,
+        meta.run_result.stats_at_best.bitstring_counts,
         out_path=hist_path,
         title="DQI sampled bitstrings (10 vars)",
     )
@@ -79,13 +79,13 @@ def main() -> int:
     bench = benchmark_dqi_pipeline(
         Q,
         p=2,
-        optimizer="cobyla",
         shots=512,
         dqi_seed=11,
         random_seed=12,
         brute_force_max_n=20,
         random_samples=2500,
         include_qaoa_baseline=True,
+        mixer="h",
     )
     print("\n=== Benchmarks ===")
     for name, res in bench.items():

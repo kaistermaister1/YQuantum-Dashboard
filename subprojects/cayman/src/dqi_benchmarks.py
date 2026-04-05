@@ -78,13 +78,13 @@ def benchmark_dqi_pipeline(
     Q_or_block: Any,
     *,
     p: int = 1,
-    optimizer: str = "cobyla",
     shots: int = 512,
     dqi_seed: int = 0,
     random_seed: int = 1,
     brute_force_max_n: int = 22,
     random_samples: int = 4096,
     include_qaoa_baseline: bool = True,
+    mixer: str = "h",
 ) -> dict[str, BenchmarkResult]:
     """Run DQI + baselines and return comparable metrics."""
     q = np.asarray(getattr(Q_or_block, "Q", Q_or_block), dtype=float)
@@ -96,9 +96,9 @@ def benchmark_dqi_pipeline(
     dqi_x, dqi_val, dqi_meta = run_dqi_with_details(
         Q_or_block,
         p=p,
-        optimizer=optimizer,
         shots=shots,
         seed=dqi_seed,
+        mixer=mixer,
     )
     dqi_runtime = time.perf_counter() - t0
     results["dqi"] = BenchmarkResult(
@@ -108,8 +108,8 @@ def benchmark_dqi_pipeline(
         runtime_sec=float(dqi_runtime),
         approximation_ratio=None,
         extra={
-            "history": dqi_meta.optimizer_result.history,
-            "n_evaluations": dqi_meta.optimizer_result.n_evaluations,
+            "history": dqi_meta.run_result.history,
+            "n_evaluations": dqi_meta.run_result.n_evaluations,
             "bitstring": dqi_meta.bitstring,
         },
     )

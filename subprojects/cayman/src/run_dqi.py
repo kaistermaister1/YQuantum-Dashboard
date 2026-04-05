@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 
 from src.dqi_core import bitstring_to_array, hamming_weight
-from src.dqi_optimize import DqiOptimizationResult, optimize_dqi
+from src.dqi_optimize import DqiRunResult, run_dqi_oneshot
 
 
 @dataclass
 class DqiRunMetadata:
     """Extended metadata returned alongside best solution/value."""
 
-    optimizer_result: DqiOptimizationResult
+    run_result: DqiRunResult
     bitstring: str
     hamming_weight_full: int
     hamming_weight_coverage: int | None
@@ -50,15 +50,13 @@ def _extract_qubo_and_meta(Q_or_block: Any) -> tuple[np.ndarray, dict[str, Any]]
 def run_dqi(
     Q: Any,
     p: int,
-    optimizer: str,
     *,
     shots: int = 512,
     seed: int = 0,
-    rng_seed: int = 0,
-    maxiter: int = 60,
-    n_samples: int = 64,
+    gammas: Sequence[float] | None = None,
+    betas: Sequence[float] | None = None,
     statistic: str = "mean",
-    mixer: str = "rx",
+    mixer: str = "h",
     max_qubits: int = 50,
     execution: str = "nexus_selene",
     nexus_hugr_name: str = "dqi-hugr",
@@ -66,18 +64,16 @@ def run_dqi(
     nexus_helios_system: str = "Helios-1",
     nexus_timeout: float | None = 300.0,
 ) -> tuple[np.ndarray, float]:
-    """Run DQI and return `(best_solution, value)` as requested."""
+    """Run DQI once; default ``execution`` is ``nexus_selene`` (use ``local`` for on-machine Selene)."""
     q, meta = _extract_qubo_and_meta(Q)
-    res = optimize_dqi(
+    res = run_dqi_oneshot(
         q,
         p=p,
-        optimizer=optimizer,  # type: ignore[arg-type]
+        gammas=gammas,
+        betas=betas,
         statistic=statistic,  # type: ignore[arg-type]
         shots=shots,
         seed=seed,
-        rng_seed=rng_seed,
-        maxiter=maxiter,
-        n_samples=n_samples,
         mixer=mixer,
         max_qubits=max_qubits,
         constant_offset=float(meta["constant_offset"]),
@@ -94,15 +90,13 @@ def run_dqi(
 def run_dqi_with_details(
     Q: Any,
     p: int,
-    optimizer: str,
     *,
     shots: int = 512,
     seed: int = 0,
-    rng_seed: int = 0,
-    maxiter: int = 60,
-    n_samples: int = 64,
+    gammas: Sequence[float] | None = None,
+    betas: Sequence[float] | None = None,
     statistic: str = "mean",
-    mixer: str = "rx",
+    mixer: str = "h",
     max_qubits: int = 50,
     execution: str = "nexus_selene",
     nexus_hugr_name: str = "dqi-hugr",
@@ -110,18 +104,16 @@ def run_dqi_with_details(
     nexus_helios_system: str = "Helios-1",
     nexus_timeout: float | None = 300.0,
 ) -> tuple[np.ndarray, float, DqiRunMetadata]:
-    """Run DQI and return `(best_solution, value, metadata)`."""
+    """Run DQI once; returns metadata. Default ``execution`` is ``nexus_selene``."""
     q, meta = _extract_qubo_and_meta(Q)
-    res = optimize_dqi(
+    res = run_dqi_oneshot(
         q,
         p=p,
-        optimizer=optimizer,  # type: ignore[arg-type]
+        gammas=gammas,
+        betas=betas,
         statistic=statistic,  # type: ignore[arg-type]
         shots=shots,
         seed=seed,
-        rng_seed=rng_seed,
-        maxiter=maxiter,
-        n_samples=n_samples,
         mixer=mixer,
         max_qubits=max_qubits,
         constant_offset=float(meta["constant_offset"]),
@@ -144,7 +136,7 @@ def run_dqi_with_details(
         hw_cov = hamming_weight(bitstring_to_array(coverage_bits))
 
     details = DqiRunMetadata(
-        optimizer_result=res,
+        run_result=res,
         bitstring=bitstring,
         hamming_weight_full=hamming_weight(best_x),
         hamming_weight_coverage=hw_cov,

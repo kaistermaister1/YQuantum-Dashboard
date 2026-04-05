@@ -7,6 +7,7 @@ The script returns the binary solution matrix ``M`` with entries ``x[i, m]``.
 from __future__ import annotations
 
 import csv
+import contextlib
 import importlib.util
 import math
 import os
@@ -15,6 +16,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Callable
 
 import numpy as np
 
@@ -36,7 +38,10 @@ SEED = 0
 MAX_QUBITS = 24
 COBYLA_MAXITER = 40
 SPSA_MAXITER = 40
-PENALTY_SCALE = 3.0
+PENALTY_SCALE = 4.0
+EXECUTION_TARGET = "local"  # "local" or "selene"
+NEXUS_PROJECT = "YQuantum QAOA"
+SELENE_SIMULATOR = "statevector"
 DATA_DIR = Path(__file__).resolve().parent.parent / "subprojects" / "will" / "Travelers" / "docs" / "data" / "YQH26_data"
 PLOTS_DIR = Path(__file__).resolve().parent / "plots"
 
@@ -155,8 +160,16 @@ class QaoaSampleStats:
 class QaoaOptimizationTrace:
     objective_values: list[float] = field(default_factory=list)
     best_objective_values: list[float] = field(default_factory=list)
+    best_bitstrings: list[str] = field(default_factory=list)
+    best_sample_energies: list[float] = field(default_factory=list)
+    improved_flags: list[bool] = field(default_factory=list)
 
-    def record(self, value: float) -> float:
+    def record(
+        self,
+        value: float,
+        best_stats: "QaoaSampleStats | None" = None,
+        improved: bool = False,
+    ) -> float:
         objective = float(value)
         self.objective_values.append(objective)
         if not self.best_objective_values:
@@ -164,6 +177,9 @@ class QaoaOptimizationTrace:
         else:
             best_objective = min(self.best_objective_values[-1], objective)
         self.best_objective_values.append(best_objective)
+        self.best_bitstrings.append("" if best_stats is None else best_stats.best_bitstring)
+        self.best_sample_energies.append(float("nan") if best_stats is None else float(best_stats.best_qubo_energy))
+        self.improved_flags.append(bool(improved))
         return best_objective
 
 
@@ -174,8 +190,128 @@ class QaoaOptimizationResult:
     trace: QaoaOptimizationTrace
 
 
+QaoaEvaluationCallback = Callable[
+    [QuboBlock, int, float, float, QaoaSampleStats, bool],
+    None,
+]
+
+
 def _log(message: str) -> None:
     print(message, flush=True)
+
+
+def _normalize_execution_target(execution_target: str) -> str:
+    target = str(execution_target).strip().lower()
+    if target in {"local", "selene"}:
+        return target
+    raise ValueError("execution_target must be 'local' or 'selene'")
+
+
+def _read_measurement_value(raw_value: Any) -> int:
+    if isinstance(raw_value, bool):
+        return int(raw_value)
+    if isinstance(raw_value, (int, np.integer)):
+        return int(raw_value)
+    if isinstance(raw_value, str):
+        lowered = raw_value.strip().lower()
+        if lowered in {"1", "true"}:
+            return 1
+        if lowered in {"0", "false"}:
+            return 0
+    raise TypeError(f"Unsupported measurement value type: {raw_value!r}")
+
+
+def _shot_to_str(shot: Any, n_vars: int) -> str:
+    if hasattr(shot, "as_dict"):
+        values = shot.as_dict()
+    elif hasattr(shot, "entries"):
+        values = dict(shot.entries)
+    elif isinstance(shot, dict):
+        values = shot
+    else:
+        raise TypeError(f"Unsupported shot type: {type(shot)!r}")
+    return "".join(str(_read_measurement_value(values[f"m{i}"])) for i in range(n_vars))
+
+
+@contextlib.contextmanager
+def _loaded_qaoa_kernel_from_source(source: str):
+    fd, path = tempfile.mkstemp(suffix="_qaoa_dynamic.py", text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(source)
+        spec = importlib.util.spec_from_file_location("qaoa_dynamic", path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("Failed to load generated QAOA module")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        kernel = module.qaoa_kernel
+        kernel.check()
+        yield kernel
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+def _compile_qaoa_hugr_from_source(source: str):
+    with _loaded_qaoa_kernel_from_source(source) as kernel:
+        return kernel.compile()
+
+
+def _run_qaoa_locally(block: QuboBlock, source: str, shots: int, seed: int) -> QaoaSampleStats:
+    with _loaded_qaoa_kernel_from_source(source) as kernel:
+        emulator = kernel.emulator(n_qubits=block.n_vars).with_shots(int(shots)).with_seed(int(seed))
+        result = emulator.run()
+    counts = Counter(_shot_to_str(shot, block.n_vars) for shot in result.results)
+    best_bitstring = min(
+        counts,
+        key=lambda bitstring: block.energy(np.array([int(char) for char in bitstring], dtype=float)),
+    )
+    best_energy = block.energy(np.array([int(char) for char in best_bitstring], dtype=float))
+    return QaoaSampleStats(dict(counts), best_bitstring, float(best_energy))
+
+
+def _run_qaoa_on_selene(block: QuboBlock, source: str, shots: int, seed: int) -> QaoaSampleStats:
+    try:
+        import qnexus as qnx
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "Selene execution requires the 'qnexus' package. Install it with 'pip install qnexus'."
+        ) from exc
+
+    qnx.login()
+    project = qnx.projects.get_or_create(name=NEXUS_PROJECT)
+    qnx.context.set_active_project(project)
+
+    hugr_ref = qnx.hugr.upload(
+        hugr_package=_compile_qaoa_hugr_from_source(source),
+        name=f"QAOA package {block.package_index + 1} HUGR {time.time_ns()}",
+    )
+    simulator_name = SELENE_SIMULATOR.strip().lower()
+    if simulator_name != "statevector":
+        raise ValueError("SELENE_SIMULATOR must be 'statevector' for this QAOA workflow")
+    config = qnx.models.SeleneConfig(
+        n_qubits=block.n_vars,
+        simulator=qnx.models.StatevectorSimulator(),
+    )
+    job_ref = qnx.start_execute_job(
+        programs=[hugr_ref],
+        n_shots=[int(shots)],
+        backend_config=config,
+        name=f"QAOA Selene package {block.package_index + 1} seed {seed} {time.time_ns()}",
+    )
+    qnx.jobs.wait_for(job_ref, timeout=None)
+    result = qnx.jobs.results(job_ref)[0].download_result()
+    shots_result = getattr(result, "results", None)
+    if shots_result is None:
+        raise RuntimeError("Unexpected Nexus Selene result format: missing shot results")
+    counts = Counter(_shot_to_str(shot, block.n_vars) for shot in shots_result)
+    best_bitstring = min(
+        counts,
+        key=lambda bitstring: block.energy(np.array([int(char) for char in bitstring], dtype=float)),
+    )
+    best_energy = block.energy(np.array([int(char) for char in best_bitstring], dtype=float))
+    return QaoaSampleStats(dict(counts), best_bitstring, float(best_energy))
 
 
 def _report_evaluation(
@@ -192,6 +328,27 @@ def _report_evaluation(
         f"[package {block.package_index + 1}] eval {evaluation_index}: "
         f"mean_energy={value:.6f}, best_mean={best_objective:.6f}, "
         f"best_sample={stats.best_qubo_energy:.6f}, elapsed={elapsed_seconds:.2f}s{suffix}"
+    )
+
+
+def _emit_evaluation_callback(
+    evaluation_callback: QaoaEvaluationCallback | None,
+    block: QuboBlock,
+    evaluation_index: int,
+    value: float,
+    best_objective: float,
+    stats: QaoaSampleStats,
+    improved: bool,
+) -> None:
+    if evaluation_callback is None:
+        return
+    evaluation_callback(
+        block,
+        int(evaluation_index),
+        float(value),
+        float(best_objective),
+        stats,
+        bool(improved),
     )
 
 
@@ -471,41 +628,22 @@ def _build_qaoa_source(c_z: np.ndarray, zz_terms: list[tuple[int, int, float]], 
     return "\n".join(lines) + "\n"
 
 
-def _run_qaoa_on_block(block: QuboBlock, gammas: np.ndarray, betas: np.ndarray, shots: int, seed: int) -> QaoaSampleStats:
+def _run_qaoa_on_block(
+    block: QuboBlock,
+    gammas: np.ndarray,
+    betas: np.ndarray,
+    shots: int,
+    seed: int,
+    execution_target: str = EXECUTION_TARGET,
+) -> QaoaSampleStats:
     if block.n_vars > MAX_QUBITS:
         raise ValueError(f"Block uses {block.n_vars} qubits, which exceeds MAX_QUBITS={MAX_QUBITS}")
     c_z, zz_terms = qubo_to_ising_pauli_coefficients(block.Q)
     source = _build_qaoa_source(c_z, zz_terms, gammas, betas)
-    fd, path = tempfile.mkstemp(suffix="_qaoa_dynamic.py", text=True)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(source)
-        spec = importlib.util.spec_from_file_location("qaoa_dynamic", path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError("Failed to load generated QAOA module")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        kernel = module.qaoa_kernel
-        kernel.check()
-        emulator = kernel.emulator(n_qubits=block.n_vars).with_shots(int(shots)).with_seed(int(seed))
-        result = emulator.run()
-    finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
-
-    def shot_to_str(shot) -> str:
-        values = shot.as_dict()
-        return "".join(str(int(values[f"m{i}"])) for i in range(block.n_vars))
-
-    counts = Counter(shot_to_str(shot) for shot in result.results)
-    best_bitstring = min(
-        counts,
-        key=lambda bitstring: block.energy(np.array([int(char) for char in bitstring], dtype=float)),
-    )
-    best_energy = block.energy(np.array([int(char) for char in best_bitstring], dtype=float))
-    return QaoaSampleStats(dict(counts), best_bitstring, float(best_energy))
+    target = _normalize_execution_target(execution_target)
+    if target == "local":
+        return _run_qaoa_locally(block, source, shots=shots, seed=seed)
+    return _run_qaoa_on_selene(block, source, shots=shots, seed=seed)
 
 
 def _mean_sample_energy(block: QuboBlock, stats: QaoaSampleStats) -> float:
@@ -526,7 +664,14 @@ def _clip_theta(theta: np.ndarray) -> np.ndarray:
     return np.clip(np.asarray(theta, dtype=float), 0.0, math.pi)
 
 
-def optimize_block_cobyla(block: QuboBlock, p: int, shots: int, seed: int) -> QaoaOptimizationResult:
+def optimize_block_cobyla(
+    block: QuboBlock,
+    p: int,
+    shots: int,
+    seed: int,
+    execution_target: str = EXECUTION_TARGET,
+    evaluation_callback: QaoaEvaluationCallback | None = None,
+) -> QaoaOptimizationResult:
     from scipy.optimize import minimize
 
     rng = np.random.default_rng(seed)
@@ -549,17 +694,35 @@ def optimize_block_cobyla(block: QuboBlock, p: int, shots: int, seed: int) -> Qa
         clipped = _clip_theta(theta)
         gammas, betas = _split_theta(clipped, p)
         evaluation_start = time.perf_counter()
-        stats = _run_qaoa_on_block(block, gammas, betas, shots=shots, seed=seed + eval_index)
+        stats = _run_qaoa_on_block(
+            block,
+            gammas,
+            betas,
+            shots=shots,
+            seed=seed + eval_index,
+            execution_target=execution_target,
+        )
         value = _mean_sample_energy(block, stats)
         elapsed_seconds = time.perf_counter() - evaluation_start
         eval_index += 1
         note = ""
+        improved = False
         if value < best_objective:
             best_objective = value
             best_theta = clipped.copy()
             best_stats = stats
             note = "new best"
-        trace.record(value)
+            improved = True
+        trace.record(value, best_stats=best_stats, improved=improved)
+        _emit_evaluation_callback(
+            evaluation_callback,
+            block,
+            evaluation_number,
+            value,
+            best_objective,
+            stats,
+            improved,
+        )
         _report_evaluation(
             block,
             evaluation_number,
@@ -581,7 +744,14 @@ def optimize_block_cobyla(block: QuboBlock, p: int, shots: int, seed: int) -> Qa
     return QaoaOptimizationResult(theta=best_theta, stats=best_stats, trace=trace)
 
 
-def optimize_block_spsa(block: QuboBlock, p: int, shots: int, seed: int) -> QaoaOptimizationResult:
+def optimize_block_spsa(
+    block: QuboBlock,
+    p: int,
+    shots: int,
+    seed: int,
+    execution_target: str = EXECUTION_TARGET,
+    evaluation_callback: QaoaEvaluationCallback | None = None,
+) -> QaoaOptimizationResult:
     rng = np.random.default_rng(seed)
     theta = rng.uniform(0.0, math.pi, size=2 * p)
     best_theta = theta.copy()
@@ -612,32 +782,33 @@ def optimize_block_spsa(block: QuboBlock, p: int, shots: int, seed: int) -> Qaoa
         g_plus, b_plus = _split_theta(theta_plus, p)
         evaluation_number = eval_index + 1
         plus_start = time.perf_counter()
-        stats_plus = _run_qaoa_on_block(block, g_plus, b_plus, shots=shots, seed=seed + eval_index)
+        stats_plus = _run_qaoa_on_block(
+            block,
+            g_plus,
+            b_plus,
+            shots=shots,
+            seed=seed + eval_index,
+            execution_target=execution_target,
+        )
         value_plus = _mean_sample_energy(block, stats_plus)
         plus_elapsed = time.perf_counter() - plus_start
         eval_index += 1
-
-        g_minus, b_minus = _split_theta(theta_minus, p)
-        evaluation_number_minus = eval_index + 1
-        minus_start = time.perf_counter()
-        stats_minus = _run_qaoa_on_block(block, g_minus, b_minus, shots=shots, seed=seed + eval_index)
-        value_minus = _mean_sample_energy(block, stats_minus)
-        minus_elapsed = time.perf_counter() - minus_start
-        eval_index += 1
-
-        gradient = ((value_plus - value_minus) / (2.0 * ck)) * (1.0 / delta)
-        theta = _clip_theta(theta - ak * gradient)
-
-        for candidate_theta, candidate_stats, candidate_value in (
-            (theta_plus, stats_plus, value_plus),
-            (theta_minus, stats_minus, value_minus),
-        ):
-            if candidate_value < best_objective:
-                best_objective = candidate_value
-                best_theta = candidate_theta.copy()
-                best_stats = candidate_stats
-
-        best_plus = trace.record(value_plus)
+        improved_plus = False
+        if value_plus < best_objective:
+            best_objective = value_plus
+            best_theta = theta_plus.copy()
+            best_stats = stats_plus
+            improved_plus = True
+        best_plus = trace.record(value_plus, best_stats=best_stats, improved=improved_plus)
+        _emit_evaluation_callback(
+            evaluation_callback,
+            block,
+            evaluation_number,
+            value_plus,
+            best_plus,
+            stats_plus,
+            improved_plus,
+        )
         _report_evaluation(
             block,
             evaluation_number,
@@ -645,9 +816,43 @@ def optimize_block_spsa(block: QuboBlock, p: int, shots: int, seed: int) -> Qaoa
             best_plus,
             stats_plus,
             plus_elapsed,
-            note=f"SPSA step {step + 1} (+)",
+            note=f"SPSA step {step + 1} (+){' new best' if improved_plus else ''}",
         )
-        best_minus = trace.record(value_minus)
+
+        g_minus, b_minus = _split_theta(theta_minus, p)
+        evaluation_number_minus = eval_index + 1
+        minus_start = time.perf_counter()
+        stats_minus = _run_qaoa_on_block(
+            block,
+            g_minus,
+            b_minus,
+            shots=shots,
+            seed=seed + eval_index,
+            execution_target=execution_target,
+        )
+        value_minus = _mean_sample_energy(block, stats_minus)
+        minus_elapsed = time.perf_counter() - minus_start
+        eval_index += 1
+
+        gradient = ((value_plus - value_minus) / (2.0 * ck)) * (1.0 / delta)
+        theta = _clip_theta(theta - ak * gradient)
+
+        improved_minus = False
+        if value_minus < best_objective:
+            best_objective = value_minus
+            best_theta = theta_minus.copy()
+            best_stats = stats_minus
+            improved_minus = True
+        best_minus = trace.record(value_minus, best_stats=best_stats, improved=improved_minus)
+        _emit_evaluation_callback(
+            evaluation_callback,
+            block,
+            evaluation_number_minus,
+            value_minus,
+            best_minus,
+            stats_minus,
+            improved_minus,
+        )
         _report_evaluation(
             block,
             evaluation_number_minus,
@@ -655,7 +860,7 @@ def optimize_block_spsa(block: QuboBlock, p: int, shots: int, seed: int) -> Qaoa
             best_minus,
             stats_minus,
             minus_elapsed,
-            note=f"SPSA step {step + 1} (-)",
+            note=f"SPSA step {step + 1} (-){' new best' if improved_minus else ''}",
         )
 
     if best_stats is None:
@@ -667,11 +872,32 @@ def optimize_block_spsa(block: QuboBlock, p: int, shots: int, seed: int) -> Qaoa
     return QaoaOptimizationResult(theta=best_theta, stats=best_stats, trace=trace)
 
 
-def optimize_block(block: QuboBlock, p: int, shots: int, seed: int) -> QaoaOptimizationResult:
+def optimize_block(
+    block: QuboBlock,
+    p: int,
+    shots: int,
+    seed: int,
+    execution_target: str = EXECUTION_TARGET,
+    evaluation_callback: QaoaEvaluationCallback | None = None,
+) -> QaoaOptimizationResult:
     if OPTIMIZER == "cobyla":
-        return optimize_block_cobyla(block, p=p, shots=shots, seed=seed)
+        return optimize_block_cobyla(
+            block,
+            p=p,
+            shots=shots,
+            seed=seed,
+            execution_target=execution_target,
+            evaluation_callback=evaluation_callback,
+        )
     if OPTIMIZER == "spsa":
-        return optimize_block_spsa(block, p=p, shots=shots, seed=seed)
+        return optimize_block_spsa(
+            block,
+            p=p,
+            shots=shots,
+            seed=seed,
+            execution_target=execution_target,
+            evaluation_callback=evaluation_callback,
+        )
     raise ValueError("OPTIMIZER must be 'cobyla' or 'spsa'")
 
 
@@ -680,11 +906,13 @@ def solve_qaoa_matrix(
     m: int = M_PACKAGES,
     p: int = P_DEPTH,
     plot_output_path: str | Path | None = None,
+    execution_target: str = EXECUTION_TARGET,
 ) -> np.ndarray:
     workflow_start = time.perf_counter()
     resolved_plot_output_path = (
         Path(plot_output_path) if plot_output_path is not None else default_loss_plot_path(n=n, m=m, p=p)
     )
+    resolved_execution_target = _normalize_execution_target(execution_target)
     _log(f"[workflow] Loading instance data from {DATA_DIR}")
     problem = subsample_problem(load_ltm_instance(DATA_DIR), n_coverages=n, m_packages=m)
     blocks = [build_qubo_block_for_package(problem, package_index) for package_index in range(problem.M)]
@@ -693,8 +921,14 @@ def solve_qaoa_matrix(
 
     _log(
         f"[workflow] Solving {len(blocks)} package-local QUBO blocks "
-        f"(N={problem.N} coverages, M={problem.M} packages, p={p}, optimizer={OPTIMIZER})"
+        f"(N={problem.N} coverages, M={problem.M} packages, p={p}, optimizer={OPTIMIZER}, "
+        f"execution_target={resolved_execution_target})"
     )
+    if resolved_execution_target == "selene":
+        _log(
+            "[workflow] Selene mode submits Nexus jobs for each QAOA evaluation, "
+            "so optimization can be much slower than local emulation."
+        )
 
     for package_index, block in enumerate(blocks):
         block_start = time.perf_counter()
@@ -702,7 +936,13 @@ def solve_qaoa_matrix(
             f"[workflow] Package {package_index + 1}/{len(blocks)} block summary: "
             f"{block.n_vars} qubits = {block.n_coverage} coverage + {block.n_slack} slack"
         )
-        result = optimize_block(block, p=p, shots=SHOTS, seed=SEED + package_index * 1000)
+        result = optimize_block(
+            block,
+            p=p,
+            shots=SHOTS,
+            seed=SEED + package_index * 1000,
+            execution_target=resolved_execution_target,
+        )
         coverage_bits = np.array([int(char) for char in result.stats.best_bitstring[:problem.N]], dtype=int)
         x_matrix[:, package_index] = coverage_bits
         plot_series.append(
@@ -729,7 +969,7 @@ def solve_qaoa_matrix(
 
 
 def main() -> np.ndarray:
-    return solve_qaoa_matrix(n=N_COVERAGES, m=M_PACKAGES, p=P_DEPTH)
+    return solve_qaoa_matrix(n=N_COVERAGES, m=M_PACKAGES, p=P_DEPTH, execution_target=EXECUTION_TARGET)
 
 
 if __name__ == "__main__":
