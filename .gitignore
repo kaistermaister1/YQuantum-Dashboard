@@ -16,6 +16,10 @@ pnpm-debug.log*
 .workspace-cache
 
 # Python
+.venv/
+.venv-*/
+venv/
+env/
 __pycache__/
 *.py[cod]
 *.pyo
