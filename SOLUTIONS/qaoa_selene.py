@@ -415,10 +415,13 @@ def solve_qaoa_matrix(
 
     def solve_single_block(package_index: int, block: base_qaoa.QuboBlock):
         block_start = time.perf_counter()
-        _log(
+        block_summary = (
             f"[workflow] Package {package_index + 1}/{len(blocks)} block summary: "
             f"{block.n_vars} qubits = {block.n_coverage} coverage + {block.n_slack} slack"
         )
+        if block.is_relaxed:
+            block_summary += f" ({block.constraint_budget_summary()})"
+        _log(block_summary)
         result = optimize_block_selene(
             session=session,
             block=block,

@@ -43,8 +43,8 @@ from SOLUTIONS.qaoa_plots import save_training_loss_plot
 # Top-level research controls.
 # ``BRANCH_COVERAGES`` / ``BRANCH_PACKAGES`` are the reduced adviser problem
 # sizes. They replace the awkward old ``n'`` / ``m'`` notation.
-TARGET_COVERAGES = 10
-TARGET_PACKAGES = 4
+TARGET_COVERAGES = 4
+TARGET_PACKAGES = 2
 P_DEPTH = 1
 TERM_QUBITS = 2
 BRANCH_PACKAGES = 2

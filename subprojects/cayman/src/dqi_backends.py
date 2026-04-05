@@ -52,6 +52,7 @@ def run_kernel_nexus(
     job_name: str,
     helios_system_name: str,
     timeout: float | None,
+    max_cost: float | None = None,
 ) -> dict[str, int]:
     try:
         import qnexus
@@ -71,7 +72,7 @@ def run_kernel_nexus(
         if mode == "helios"
         else SeleneConfig()
     )
-    results = qnexus.execute(
+    exec_kwargs: dict[str, Any] = dict(
         programs=ref,
         n_shots=[int(shots)],
         backend_config=cfg,
@@ -80,6 +81,9 @@ def run_kernel_nexus(
         timeout=timeout,
         project=dqi_test_project,
     )
+    if max_cost is not None:
+        exec_kwargs["max_cost"] = float(max_cost)
+    results = qnexus.execute(**exec_kwargs)
     raw = results[0]
     if not isinstance(raw, QsysResult):
         raise TypeError(

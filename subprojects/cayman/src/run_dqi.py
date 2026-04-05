@@ -8,7 +8,13 @@ from typing import Any, Sequence
 import numpy as np
 
 from src.dqi_core import bitstring_to_array, hamming_weight
+from src.dqi_insurance_parity import build_insurance_parity_B_rhs
 from src.dqi_optimize import DqiRunResult, run_dqi_oneshot
+
+try:
+    from insurance_model import BundlingProblem
+except ImportError:
+    from src.insurance_model import BundlingProblem
 
 
 @dataclass
@@ -63,9 +69,30 @@ def run_dqi(
     nexus_job_name: str = "dqi-execute",
     nexus_helios_system: str = "Helios-1",
     nexus_timeout: float | None = 300.0,
+    nexus_max_cost: float | None = None,
+    B: np.ndarray | None = None,
+    parity_rhs: np.ndarray | None = None,
+    dicke_k: int | None = None,
+    n_coverage: int | None = None,
+    insurance_parity: tuple[BundlingProblem, int] | None = None,
+    use_bp_decoder: bool = False,
+    bp_iterations: int = 1,
 ) -> tuple[np.ndarray, float]:
-    """Run DQI once; default ``execution`` is ``nexus_selene`` (use ``local`` for on-machine Selene)."""
+    """Run DQI once; default ``execution`` is ``nexus_selene`` (use ``local`` for on-machine Selene).
+
+    Set ``insurance_parity=(problem, package_index)`` to build a GF(2) parity matrix from the same
+    slack layout as :class:`qubo_block.QuboBlock`, append syndrome qubits, and post-select algebraically
+    consistent shots.  Use ``dicke_k`` together with ``n_coverage`` (or rely on ``problem.N`` when
+    ``insurance_parity`` is set) to prepare a Dicke state on the coverage qubits before parity encoding.
+    """
     q, meta = _extract_qubo_and_meta(Q)
+    B_use, rhs_use, n_cov_use = B, parity_rhs, n_coverage
+    if insurance_parity is not None:
+        prob, m = insurance_parity
+        if B_use is None:
+            B_use, rhs_use = build_insurance_parity_B_rhs(prob, m)
+        if n_cov_use is None:
+            n_cov_use = int(prob.N)
     res = run_dqi_oneshot(
         q,
         p=p,
@@ -82,6 +109,13 @@ def run_dqi(
         nexus_job_name=nexus_job_name,
         nexus_helios_system=nexus_helios_system,
         nexus_timeout=nexus_timeout,
+        nexus_max_cost=nexus_max_cost,
+        B=B_use,
+        parity_rhs=rhs_use,
+        dicke_k=dicke_k,
+        n_coverage=n_cov_use,
+        use_bp_decoder=use_bp_decoder,
+        bp_iterations=bp_iterations,
     )
     best_x = bitstring_to_array(res.stats_at_best.best_bitstring)
     return best_x, float(res.stats_at_best.best_value)
@@ -103,9 +137,27 @@ def run_dqi_with_details(
     nexus_job_name: str = "dqi-execute",
     nexus_helios_system: str = "Helios-1",
     nexus_timeout: float | None = 300.0,
+    nexus_max_cost: float | None = None,
+    B: np.ndarray | None = None,
+    parity_rhs: np.ndarray | None = None,
+    dicke_k: int | None = None,
+    n_coverage: int | None = None,
+    insurance_parity: tuple[BundlingProblem, int] | None = None,
+    use_bp_decoder: bool = False,
+    bp_iterations: int = 1,
 ) -> tuple[np.ndarray, float, DqiRunMetadata]:
-    """Run DQI once; returns metadata. Default ``execution`` is ``nexus_selene``."""
+    """Run DQI once; returns metadata. Default ``execution`` is ``nexus_selene``.
+
+    Same options as :func:`run_dqi`.
+    """
     q, meta = _extract_qubo_and_meta(Q)
+    B_use, rhs_use, n_cov_use = B, parity_rhs, n_coverage
+    if insurance_parity is not None:
+        prob, m = insurance_parity
+        if B_use is None:
+            B_use, rhs_use = build_insurance_parity_B_rhs(prob, m)
+        if n_cov_use is None:
+            n_cov_use = int(prob.N)
     res = run_dqi_oneshot(
         q,
         p=p,
@@ -122,6 +174,13 @@ def run_dqi_with_details(
         nexus_job_name=nexus_job_name,
         nexus_helios_system=nexus_helios_system,
         nexus_timeout=nexus_timeout,
+        nexus_max_cost=nexus_max_cost,
+        B=B_use,
+        parity_rhs=rhs_use,
+        dicke_k=dicke_k,
+        n_coverage=n_cov_use,
+        use_bp_decoder=use_bp_decoder,
+        bp_iterations=bp_iterations,
     )
 
     bitstring = res.stats_at_best.best_bitstring

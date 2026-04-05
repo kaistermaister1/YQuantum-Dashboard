@@ -1,0 +1,75 @@
+opt_abbrev,name,family,cost_eur,price_eur,margin_eur
+OPT_EXT_LEDHL,LED headlights,FAM_EXT,200,500,300
+OPT_EXT_LT,LED taillights,FAM_EXT,150,350,200
+OPT_EXT_PT,Power tailgate,FAM_EXT,300,700,400
+OPT_BUMP_ADV,Advanced-style bumpers,FAM_BUMP,250,600,350
+OPT_BUMP_SP,Sport-style bumpers,FAM_BUMP,225,550,325
+OPT_WND_ALU,Aluminum-look surrounds,FAM_WND,75,175,100
+OPT_WND_DARK,Dark-finish surrounds,FAM_WND,75,175,100
+OPT_MIR_BODY,Body-color mirror housings,FAM_MIR,50,125,75
+OPT_MIR_BLACK,Black mirror housings,FAM_MIR,50,125,75
+OPT_PNT_FULL,Full-body paint finish,FAM_PNT,800,2000,1200
+OPT_PNT_CON,Contrasting-accent paint,FAM_PNT,150,400,250
+OPT_WHL_18,18″ alloy wheels,FAM_WHL,400,1000,600
+OPT_WHL_19,19″ alloy wheels,FAM_WHL,450,1100,650
+OPT_WHL_20,20″ alloy wheels,FAM_WHL,500,1200,700
+OPT_WHL_PERF,Performance tires,FAM_WHL,200,500,300
+OPT_WHL_AS,All-season tires,FAM_WHL,150,400,250
+OPT_STYPE_STD,Standard seats,FAM_STYPE,500,1250,750
+OPT_STYPE_SP,Sport seats,FAM_STYPE,650,1600,950
+OPT_STYPE_EX,Executive seats,FAM_STYPE,800,2000,1200
+OPT_SFEAT_HTF,Heated seats (front),FAM_SFEAT,100,300,200
+OPT_SFEAT_HTR,Heated seats (rear),FAM_SFEAT,125,350,225
+OPT_SFEAT_VENT,Ventilated seats,FAM_SFEAT,200,500,300
+OPT_SFEAT_MSG,Massage function,FAM_SFEAT,250,600,350
+OPT_UPHOL_CLTH,Cloth upholstery,FAM_UPHOL,200,500,300
+OPT_UPHOL_LEA,Leather upholstery,FAM_UPHOL,400,1000,600
+OPT_UPHOL_PREM,Premium leather upholstery,FAM_UPHOL,600,1500,900
+OPT_UPHOL_ALC,Alcantara/sueded material,FAM_UPHOL,300,800,500
+OPT_STWHL_STD,Standard steering wheel,FAM_STWHL,150,400,250
+OPT_STWHL_PDL,Wheel with paddle shifters,FAM_STWHL,200,500,300
+OPT_STWHL_SP,Sport steering wheel,FAM_STWHL,300,800,500
+OPT_SAF_AIRBAG,Side-curtain airbags,FAM_SAF,350,900,550
+OPT_SAF_ISOFIX,ISOFIX anchors,FAM_SAF,50,150,100
+OPT_SAF_OCC_R,Occupant-detection (rear-interior),FAM_SAF,100,300,200
+OPT_SAF_OCC_D,Occupant-detection (display-only),FAM_SAF,75,200,125
+OPT_CC_DUAL,Dual-zone climate control,FAM_CC,250,600,350
+OPT_CC_FOUR,Four-zone climate control,FAM_CC,400,1000,600
+OPT_CC_HSW,Heated steering wheel,FAM_CC,150,400,250
+OPT_CC_AIRFILT,Active air filtration,FAM_CC,150,400,250
+OPT_INF_TS8,8″ touchscreen,FAM_INF,250,600,350
+OPT_INF_TS12,12″ touchscreen,FAM_INF,400,1000,600
+OPT_INF_DDIG,Digital driver display,FAM_INF,300,800,500
+OPT_INF_HUD,Head-up display,FAM_INF,350,900,550
+OPT_INF_WCHARG,Wireless smartphone charging,FAM_INF,100,300,200
+OPT_INF_WIFI,In-car Wi-Fi hotspot,FAM_INF,150,400,250
+OPT_INF_RSPD,Rear-seat passenger displays,FAM_INF,200,500,300
+OPT_LBA_AMBI,Ambient interior LED lighting,FAM_LBA,75,200,125
+OPT_LBA_FOOT,Footwell illumination,FAM_LBA,50,125,75
+OPT_LBA_PUDD,Door-puddle lights,FAM_LBA,50,125,75
+OPT_LBA_SCFL,Illuminated scuff plates,FAM_LBA,150,400,250
+OPT_ADAS_ACR,Adaptive cruise control,FAM_ADAS,200,600,400
+OPT_ADAS_LDW,Lane-departure warning,FAM_ADAS,150,400,250
+OPT_ADAS_EA,Emergency-assist (auto-brake),FAM_ADAS,200,500,300
+OPT_ADAS_LCA,Lane-change assistant,FAM_ADAS,200,600,400
+OPT_ADAS_INT,Intersection assist,FAM_ADAS,150,400,250
+OPT_ADAS_DRO,Drowsiness monitoring,FAM_ADAS,100,300,200
+OPT_ADAS_EXT,Extended safety,FAM_ADAS,250,700,450
+OPT_ADAS_PARK,Automated parking assist,FAM_ADAS,300,800,500
+OPT_ADAS_CAM360,360° surround-view cameras,FAM_ADAS,250,700,450
+OPT_ADAS_PPLUS,Park-assist Plus,FAM_ADAS,200,600,400
+OPT_ADAS_REARCAM,Rear-view camera,FAM_ADAS,100,300,200
+OPT_ADAS_SIGNS,Traffic-sign recognition,FAM_ADAS,100,300,200
+OPT_ADAS_LIMIT,Speed-limiter,FAM_ADAS,50,150,100
+OPT_CHAS_SSP,Sport suspension,FAM_CHAS,300,800,500
+OPT_CHAS_ADS,Adaptive suspension,FAM_CHAS,400,1000,600
+OPT_CHAS_VRS,Variable-ratio steering,FAM_CHAS,200,600,400
+OPT_CHAS_BRAKE,Performance brakes,FAM_CHAS,500,1500,1000
+OPT_AUD_STD,Standard stereo,FAM_AUD,100,300,200
+OPT_AUD_10SPK,Premium 10-speaker system,FAM_AUD,200,600,400
+OPT_AUD_16SPK,16-speaker surround system,FAM_AUD,400,1200,800
+OPT_AUD_BRAND,High-end branded audio,FAM_AUD,500,1500,1000
+OPT_AUD_RSEAT,Rear-seat entertainment screens,FAM_AUD,300,800,500
+OPT_CT_PASS,Through-load pass-through (40:20:40),FAM_CTOW,100,300,200
+OPT_CT_TOWPREP,Tow-hitch preparation,FAM_CTOW,200,600,400
+OPT_CT_ROOFM,Roof-rack mounting points,FAM_CTOW,100,300,200

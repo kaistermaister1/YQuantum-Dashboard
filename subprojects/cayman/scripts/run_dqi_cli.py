@@ -29,15 +29,13 @@ def _load_q_from_file(path: Path) -> np.ndarray:
     return (q + q.T) * 0.5
 
 
-def _build_block_from_ltm(args: argparse.Namespace):
+def _load_ltm_problem(args: argparse.Namespace):
     from src.insurance_model import load_ltm_instance, subsample_problem
-    from src.qubo_block import build_qubo_block_for_package
 
     problem = load_ltm_instance(args.data_dir)
     if args.subsample_coverages > 0 and args.subsample_packages > 0:
         problem = subsample_problem(problem, args.subsample_coverages, args.subsample_packages)
-    block = build_qubo_block_for_package(problem, package_index=args.package, penalty_weight=args.penalty_weight)
-    return block
+    return problem
 
 
 def _parse_args() -> argparse.Namespace:
@@ -86,6 +84,30 @@ def _parse_args() -> argparse.Namespace:
         default=300.0,
         help="Seconds to wait for each Nexus job (ignored if --nexus-no-timeout).",
     )
+    ap.add_argument(
+        "--nexus-max-cost",
+        type=float,
+        default=None,
+        help="Optional Nexus max_cost (required by some Helios systems).",
+    )
+
+    ap.add_argument(
+        "--insurance-parity",
+        action="store_true",
+        help="With --source ltm-block: GF(2) parity syndromes + post-selection (see README).",
+    )
+    ap.add_argument(
+        "--dicke-k",
+        type=int,
+        default=None,
+        help="With --insurance-parity: Hamming weight for Dicke prep on coverage qubits (omit for uniform H).",
+    )
+    ap.add_argument(
+        "--bp-decoder",
+        action="store_true",
+        help="Use dqi-main-compatible BP pipeline (Qiskit local simulation, y=0+ancilla post-selection).",
+    )
+    ap.add_argument("--bp-iterations", type=int, default=1, help="Belief-propagation iterations in --bp-decoder mode.")
 
     ap.add_argument("--benchmark", action="store_true", help="Run baseline comparisons")
     ap.add_argument("--no-qaoa-baseline", action="store_true")
@@ -101,17 +123,29 @@ def main() -> int:
     args = _parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
+    ins_par = None
     if args.source == "matrix":
         if args.q_path is None:
             raise ValueError("--q-path is required when --source matrix")
         target = _load_q_from_file(args.q_path)
+        if args.insurance_parity:
+            raise ValueError("--insurance-parity requires --source ltm-block")
     else:
         if args.data_dir is None:
             raise ValueError("--data-dir is required when --source ltm-block")
-        target = _build_block_from_ltm(args)
+        from src.qubo_block import build_qubo_block_for_package
+
+        problem = _load_ltm_problem(args)
+        target = build_qubo_block_for_package(
+            problem, package_index=args.package, penalty_weight=args.penalty_weight
+        )
+        if args.insurance_parity:
+            ins_par = (problem, int(args.package))
 
     nexus_timeout = None if args.nexus_no_timeout else float(args.nexus_timeout)
     exec_key = args.execution.replace("-", "_")
+    if args.bp_decoder and exec_key not in ("local", "selene"):
+        raise ValueError("--bp-decoder requires --execution local (Qiskit simulation path).")
 
     best_x, best_value, meta = run_dqi_with_details(
         target,
@@ -126,6 +160,11 @@ def main() -> int:
         nexus_job_name=args.nexus_job_name,
         nexus_helios_system=args.nexus_helios_system,
         nexus_timeout=nexus_timeout,
+        nexus_max_cost=args.nexus_max_cost,
+        insurance_parity=ins_par,
+        dicke_k=args.dicke_k,
+        use_bp_decoder=bool(args.bp_decoder),
+        bp_iterations=int(args.bp_iterations),
     )
 
     print("=== DQI Result ===")
@@ -136,6 +175,9 @@ def main() -> int:
     if meta.hamming_weight_coverage is not None:
         print("hamming weight (coverage bits):", meta.hamming_weight_coverage)
     print("circuit executions:", meta.run_result.n_evaluations)
+    pr = meta.run_result.stats_at_best.post_selection_rate
+    if pr is not None:
+        print("parity post-selection rate:", pr)
 
     if args.save_plots:
         conv_path = args.out_dir / "dqi_objective.png"
