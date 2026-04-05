@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
-from src.qubo_qaoa_p1 import (
+from src.qubo_qaoa import (
     QaoaP1SampleStats,
     QaoaP2SampleStats,
     run_qaoa_p1_on_block,

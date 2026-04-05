@@ -1,4 +1,4 @@
-"""Tests for ``qubo_qaoa_p1`` (Ising map + Guppy p=1 smoke)."""
+"""Tests for ``qubo_qaoa`` (Ising map + Guppy p=1 smoke)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.qubo_qaoa_p1 import (
+from src.qubo_qaoa import (
     bruteforce_minimize_qubo,
     ising_energy_for_bitstring,
     qubo_to_ising_pauli_coefficients,

@@ -10,17 +10,17 @@ This is a small **C++** demo meant to **screen-record** for submissions: a **3D 
 
 ## 1. Export real data from Python
 
-From `Travelers/code_examples` (uses your LTM CSVs and `qubo_block.build_qubo_block_for_package`):
+From `Travelers/code_examples` (paths relative to `subprojects/will/`):
 
 ```bash
 cd Travelers/code_examples
 # Use the project venv if system Python lacks PuLP:
 PY=./.venv/bin/python
-PYTHONPATH=src $PY ../qubo_vis/scripts/export_qubo_surface.py \
+PYTHONPATH=src $PY ../../visualizations/qubo_vis/scripts/export_qubo_surface.py \
   --data-dir ../docs/data/YQH26_data \
   --package 0 \
   --subsample-coverages 10 --subsample-packages 3 \
-  -o ../qubo_vis/qubo_surface.txt
+  -o ../../visualizations/qubo_vis/qubo_surface.txt
 ```
 
 Omit subsampling for the full block (large \(n\) → dense mesh; better for screenshots of sparsity structure at moderate \(n\)).
@@ -31,7 +31,7 @@ Install [Raylib](https://www.raylib.com/). On macOS:
 
 ```bash
 brew install raylib
-cd Travelers/qubo_vis
+cd visualizations/qubo_vis
 make
 ```
 

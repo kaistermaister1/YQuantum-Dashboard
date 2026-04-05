@@ -13,7 +13,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.qubo_qaoa_p1 import QaoaP1SampleStats
+from src.qubo_qaoa import QaoaP1SampleStats
 from src.qubo_qaoa_optimize import (
     mean_sample_energy,
     repeat_optimize_qaoa_p1,
